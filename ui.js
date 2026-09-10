@@ -4,6 +4,8 @@
   var modalRoot = document.getElementById('modal-root');
   var toastRoot = document.getElementById('toast-root');
   var objectUrls = [];
+  var thumbnailCache = {};
+  var thumbnailMaxBytes = 3 * 1024 * 1024;
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -77,6 +79,64 @@
         '<strong>' + escapeHtml(fileGlyph(file)) + '</strong><span>' + escapeHtml(file.name) + '</span>' +
         (file.size ? '<small>' + escapeHtml(fileSize(file.size)) + '</small>' : '') + remove + '</button>';
     }).join('') + '</div>';
+  }
+
+  function fileKind(file) {
+    var type = String(file && file.mimeType || '').toLowerCase();
+    var name = String(file && file.name || '').toLowerCase();
+    if (type.indexOf('image/') === 0 || /\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) return 'image';
+    if (type.indexOf('video/') === 0 || /\.(mp4|webm|mov|m4v)$/i.test(name)) return 'video';
+    if (type.indexOf('pdf') >= 0 || name.endsWith('.pdf')) return 'pdf';
+    if (/\.(doc|docx)$/i.test(name)) return 'word';
+    if (/\.(ppt|pptx)$/i.test(name)) return 'powerpoint';
+    return 'file';
+  }
+
+  function fileKindLabel(kind) {
+    return {
+      image: '이미지',
+      video: '영상',
+      pdf: 'PDF',
+      word: 'Word',
+      powerpoint: 'PowerPoint',
+      file: '첨부파일'
+    }[kind] || '첨부파일';
+  }
+
+  function attachmentGallery(files, role, options) {
+    var settings = options || {};
+    var list = (files || []).slice();
+    if (!list.length) return '';
+    if (settings.preferImage !== false) {
+      list.sort(function (a, b) {
+        return (fileKind(a) === 'image' ? -1 : 0) - (fileKind(b) === 'image' ? -1 : 0);
+      });
+    }
+    var limit = Math.max(1, Number(settings.maxItems || list.length));
+    var visible = list.slice(0, limit);
+    var contextValue = settings.context
+      ? attr(encodeURIComponent(JSON.stringify(settings.context)))
+      : '';
+    var compact = settings.compact ? ' compact' : '';
+    var cards = visible.map(function (file) {
+      var kind = fileKind(file);
+      var canLoadThumbnail = kind === 'image' && Number(file.size || 0) <= thumbnailMaxBytes;
+      var visual = canLoadThumbnail
+        ? '<span class="attachment-preview-visual image" data-thumbnail-preview><span class="thumbnail-loading">이미지 불러오는 중…</span></span>'
+        : '<span class="attachment-preview-visual type ' + attr(kind) + '"><strong>' +
+            escapeHtml(fileGlyph(file)) + '</strong><span>' + escapeHtml(fileKindLabel(kind)) + '</span></span>';
+      return '<button class="attachment-preview-card" type="button" data-file-id="' + attr(file.id) +
+        '" data-file-role="' + attr(role || '') + '" data-file-json="' +
+        attr(encodeURIComponent(JSON.stringify(file))) + '"' +
+        (contextValue ? ' data-preview-context="' + contextValue + '"' : '') +
+        (canLoadThumbnail ? ' data-thumbnail-file="true"' : '') + '>' + visual +
+        '<span class="attachment-preview-caption"><strong>' + escapeHtml(file.name) + '</strong>' +
+          '<small>' + escapeHtml([fileKindLabel(kind), file.size ? fileSize(file.size) : ''].filter(Boolean).join(' · ')) + '</small></span>' +
+      '</button>';
+    }).join('');
+    var remaining = list.length - visible.length;
+    return '<div class="attachment-gallery' + compact + '">' + cards +
+      (remaining > 0 ? '<span class="attachment-more">첨부파일 +' + remaining + '개</span>' : '') + '</div>';
   }
 
   function toast(message, type) {
@@ -325,7 +385,17 @@
     }
   }
 
-  async function previewAttachment(file, role) {
+  function previewContextHtml(context) {
+    if (!context) return '';
+    return '<section class="preview-context">' +
+      '<div class="preview-context-head"><strong>' + escapeHtml(context.heading || '함께 작성한 글') + '</strong>' +
+        (context.meta ? '<span>' + escapeHtml(context.meta) + '</span>' : '') + '</div>' +
+      '<div class="preview-context-body">' +
+        (context.text ? nl2br(context.text) : '<span class="muted-text">작성한 글 없이 파일만 올렸어요.</span>') +
+      '</div></section>';
+  }
+
+  async function previewAttachment(file, role, context) {
     var mime = String(file.mimeType || '').toLowerCase();
     var name = String(file.name || '').toLowerCase();
     var isImage = mime.indexOf('image/') === 0;
@@ -335,7 +405,8 @@
     var dialog = openModal({
       title: file.name || '첨부파일 미리보기',
       wide: true,
-      html: '<div class="preview-stage"><div class="loader"></div></div>' +
+      html: previewContextHtml(context) +
+        '<div class="preview-stage"><div class="loader"></div></div>' +
         '<div class="modal-actions"><button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button></div>'
     });
     dialog.querySelector('[data-download-file]').addEventListener('click', function () {
@@ -444,16 +515,75 @@
 
   function bindAttachmentClicks(root, fallbackRole) {
     (root || document).querySelectorAll('[data-file-json]').forEach(function (button) {
+      if (button.dataset.fileBound === 'true') return;
+      button.dataset.fileBound = 'true';
       button.addEventListener('click', function (event) {
+        event.stopPropagation();
         if (event.target.closest('[data-remove-attachment]')) return;
         try {
           var file = JSON.parse(decodeURIComponent(button.dataset.fileJson));
-          previewAttachment(file, button.dataset.fileRole || fallbackRole);
+          var context = button.dataset.previewContext
+            ? JSON.parse(decodeURIComponent(button.dataset.previewContext))
+            : null;
+          previewAttachment(file, button.dataset.fileRole || fallbackRole, context);
         } catch (error) {
           toast('첨부파일 정보를 읽지 못했습니다.', 'error');
         }
       });
     });
+    hydrateAttachmentThumbnails(root, fallbackRole);
+  }
+
+  function thumbnailUrl(file, role) {
+    var cacheKey = String(role || '') + ':' + String(file.id || '');
+    if (thumbnailCache[cacheKey]) return thumbnailCache[cacheKey];
+    thumbnailCache[cacheKey] = window.LearnAPI.request('getFileContent', { fileId: file.id }, role).then(function (response) {
+      return 'data:' + String(response.mimeType || file.mimeType || 'image/jpeg') + ';base64,' + response.data;
+    });
+    return thumbnailCache[cacheKey];
+  }
+
+  function loadAttachmentThumbnail(button, fallbackRole) {
+    if (button.dataset.thumbnailLoading === 'true' || button.dataset.thumbnailLoaded === 'true') return;
+    button.dataset.thumbnailLoading = 'true';
+    var target = button.querySelector('[data-thumbnail-preview]');
+    try {
+      var file = JSON.parse(decodeURIComponent(button.dataset.fileJson));
+      thumbnailUrl(file, button.dataset.fileRole || fallbackRole).then(function (url) {
+        if (!target || !target.isConnected) return;
+        target.innerHTML = '<img alt="' + attr(file.name) + ' 썸네일">';
+        target.querySelector('img').src = url;
+        button.dataset.thumbnailLoaded = 'true';
+        button.dataset.thumbnailLoading = 'false';
+      }).catch(function () {
+        if (!target || !target.isConnected) return;
+        target.classList.remove('image');
+        target.classList.add('type');
+        target.innerHTML = '<strong>▧</strong><span>눌러서 미리보기</span>';
+        button.dataset.thumbnailLoading = 'false';
+      });
+    } catch (error) {
+      button.dataset.thumbnailLoading = 'false';
+    }
+  }
+
+  function hydrateAttachmentThumbnails(root, fallbackRole) {
+    var buttons = Array.from((root || document).querySelectorAll('[data-thumbnail-file]')).filter(function (button) {
+      return button.dataset.thumbnailLoaded !== 'true' && button.dataset.thumbnailLoading !== 'true';
+    });
+    if (!buttons.length) return;
+    if (!('IntersectionObserver' in window)) {
+      buttons.forEach(function (button) { loadAttachmentThumbnail(button, fallbackRole); });
+      return;
+    }
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        loadAttachmentThumbnail(entry.target, fallbackRole);
+      });
+    }, { rootMargin: '180px' });
+    buttons.forEach(function (button) { observer.observe(button); });
   }
 
   function emptyState(title, message, actionHtml) {
@@ -473,6 +603,7 @@
     localDateTime: toLocalInput,
     size: fileSize,
     attachments: attachmentList,
+    attachmentGallery: attachmentGallery,
     toast: toast,
     modal: openModal,
     closeModal: closeModal,

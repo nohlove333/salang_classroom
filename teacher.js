@@ -945,20 +945,68 @@
       html += UI.empty('아직 제출물이 없어요', '학생이 과제를 제출하면 이곳에 표시됩니다.');
     } else {
       html += '<div class="item-list">' + submissions.map(function (submission) {
-        return '<article class="item-card"><div class="item-top"><div><h3>' +
+        var context = {
+          heading: submission.studentNumber + '번 ' + submission.studentName + ' 작성 내용',
+          meta: assignment.title,
+          text: submission.text || ''
+        };
+        return '<article class="item-card content-clickable submission-summary-card" tabindex="0" data-teacher-submission="' +
+          UI.attr(submission.id) + '" aria-label="' + UI.attr(submission.studentNumber + '번 ' + submission.studentName + ' 제출물 상세 보기') +
+          '"><div class="item-top"><div><h3>' +
           UI.escape(submission.studentNumber + '번 ' + submission.studentName) + '</h3>' +
           '<div class="meta-line"><span>제출 ' + UI.escape(UI.date(submission.submittedAt, true)) + '</span>' +
           (submission.updatedAt !== submission.submittedAt ? '<span>마지막 수정 ' + UI.escape(UI.date(submission.updatedAt, true)) + '</span>' : '') +
           '</div></div><span class="status-badge submitted">제출 완료</span></div>' +
           (submission.text ? '<p class="item-body">' + UI.escape(submission.text) + '</p>' : '') +
-          UI.attachments(submission.attachments, 'teacher') + '</article>';
+          UI.attachmentGallery(submission.attachments, 'teacher', { compact: true, maxItems: 2, context: context }) +
+          '<span class="submission-open-hint">눌러서 글과 파일 전체 보기 ›</span></article>';
       }).join('') + '</div>';
     }
     var dialog = UI.modal({ title: assignment.title + ' 제출물', wide: true, html: html });
     UI.bindFiles(dialog, 'teacher');
+    dialog.querySelectorAll('[data-teacher-submission]').forEach(function (card) {
+      function openDetail(event) {
+        if (event && event.target.closest('button, a')) return;
+        var submission = submissions.find(function (item) { return item.id === card.dataset.teacherSubmission; });
+        if (submission) openTeacherSubmissionDetail(submission, assignment, classId, container, tab);
+      }
+      card.addEventListener('click', openDetail);
+      card.addEventListener('keydown', function (event) {
+        if (event.target !== card || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        openDetail(event);
+      });
+    });
     var downloadAll = dialog.querySelector('[data-download-all]');
     if (downloadAll) downloadAll.addEventListener('click', function () {
       createBundle(downloadAll, 'assignment', assignment.id, assignment.title, classId);
+    });
+  }
+
+  function openTeacherSubmissionDetail(submission, assignment, classId, container, tab) {
+    var context = {
+      heading: submission.studentNumber + '번 ' + submission.studentName + ' 작성 내용',
+      meta: assignment.title,
+      text: submission.text || ''
+    };
+    var dialog = UI.modal({
+      title: submission.studentNumber + '번 ' + submission.studentName + ' · 제출물',
+      wide: true,
+      html:
+        '<div class="detail-meta"><span class="status-badge submitted">제출 완료</span>' +
+          '<span>제출 ' + UI.escape(UI.date(submission.submittedAt, true)) + '</span>' +
+          (submission.updatedAt !== submission.submittedAt ? '<span>마지막 수정 ' + UI.escape(UI.date(submission.updatedAt, true)) + '</span>' : '') +
+        '</div>' +
+        '<section class="submission-detail-section"><h3>학생이 작성한 글</h3>' +
+          '<div class="detail-body">' + (submission.text ? UI.nl2br(submission.text) : '<span class="muted-text">작성한 글 없이 파일만 제출했어요.</span>') + '</div></section>' +
+        '<section class="submission-detail-section"><h3>첨부파일</h3>' +
+          (UI.attachmentGallery(submission.attachments, 'teacher', { context: context }) || '<p class="muted-text">첨부한 파일이 없어요.</p>') +
+        '</section>' +
+        '<div class="modal-actions"><button class="button secondary small" type="button" data-back-to-submissions>제출 목록으로</button></div>'
+    });
+    UI.bindFiles(dialog, 'teacher');
+    dialog.querySelector('[data-back-to-submissions]').addEventListener('click', function () {
+      openSubmissions(assignment.id, classId, container, tab);
     });
   }
 
@@ -969,11 +1017,17 @@
     posts.forEach(function (post) { byStudent[post.studentId] = post; });
     var cards = classData.students.map(function (student) {
       var post = byStudent[student.id];
-      return '<article class="student-tile" tabindex="0" data-teacher-post="' + UI.attr(post ? post.id : '') + '">' +
+      var context = post ? {
+        heading: student.number + '번 ' + student.name + '의 글',
+        meta: board.title,
+        text: post.text || ''
+      } : null;
+      return '<article class="student-tile board-feed-card" tabindex="' + (post ? '0' : '-1') + '" data-teacher-post="' + UI.attr(post ? post.id : '') + '">' +
         '<div><span class="tile-number">' + UI.escape(student.number) + '</span><span class="tile-name">' + UI.escape(student.name) + '</span></div>' +
         (post
           ? '<div class="tile-content">' + UI.escape((post.text || '첨부파일 게시물').slice(0, 92)) +
             (post.text && post.text.length > 92 ? '…' : '') + '</div>' +
+            UI.attachmentGallery(post.attachments, 'teacher', { compact: true, maxItems: 1, context: context }) +
             (post.status === 'revision' ? '<div class="tile-review-state revision">반려 · 수정 필요</div>' : '') +
             (post.status === 'confirmed' ? '<div class="tile-review-state confirmed">확인 완료</div>' : '')
           : '<div class="tile-empty">아직 작성하지 않았어요.</div>') +
@@ -997,13 +1051,14 @@
       createBundle(bundleButton, 'board', board.id, board.title, classId);
     });
     dialog.querySelectorAll('[data-teacher-post]').forEach(function (tile) {
-      tile.addEventListener('click', function () {
+      tile.addEventListener('click', function (event) {
+        if (event.target.closest('button, a, input, textarea, select, label')) return;
         if (!tile.dataset.teacherPost) return;
         var post = posts.find(function (entry) { return entry.id === tile.dataset.teacherPost; });
         openBoardPostReview(post, board, classId, container, tab);
       });
       tile.addEventListener('keydown', function (event) {
-        if ((event.key === 'Enter' || event.key === ' ') && tile.dataset.teacherPost) {
+        if (event.target === tile && (event.key === 'Enter' || event.key === ' ') && tile.dataset.teacherPost) {
           event.preventDefault();
           var post = posts.find(function (entry) { return entry.id === tile.dataset.teacherPost; });
           openBoardPostReview(post, board, classId, container, tab);
@@ -1023,7 +1078,11 @@
         '<div class="detail-meta"><span>게시 ' + UI.escape(UI.date(post.createdAt, true)) + '</span>' +
           (post.updatedAt !== post.createdAt ? '<span>수정 ' + UI.escape(UI.date(post.updatedAt, true)) + '</span>' : '') + '</div>' +
         '<div class="detail-body">' + (post.text ? UI.nl2br(post.text) : '<span class="muted-text">작성된 글 없이 파일만 게시했어요.</span>') + '</div>' +
-        UI.attachments(post.attachments, 'teacher') +
+        UI.attachmentGallery(post.attachments, 'teacher', { context: {
+          heading: post.studentNumber + '번 ' + post.studentName + '의 글',
+          meta: board.title,
+          text: post.text || ''
+        } }) +
         '<div class="modal-actions moderation-actions">' +
           '<button class="button soft" type="button" data-review-decision="revision">반려</button>' +
           '<button class="button danger" type="button" data-delete-post>삭제</button>' +
