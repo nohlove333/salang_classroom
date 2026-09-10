@@ -163,9 +163,10 @@ video {
   display: flex;
   align-items: center;
   gap: 34px;
+  margin-right: clamp(28px, 3vw, 56px);
+  margin-left: auto;
   font-size: 0.93rem;
   font-weight: 700;
-  transform: translateX(clamp(24px, 4vw, 72px));
 }
 
 .top-nav a {
@@ -2129,7 +2130,7 @@ video {
     border-radius: 10px;
     background: var(--paper);
     box-shadow: var(--shadow-soft);
-    transform: none;
+    margin: 0;
   }
   .top-nav.open { display: grid; }
   .top-nav a { padding: 13px; }
