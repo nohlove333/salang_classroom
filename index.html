@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="공지, 과제, 보드를 한곳에서 관리하는 사랑스런 수업 시간" />
+    <meta name="theme-color" content="#fffdfd" />
+    <title>사랑스런(Learn) 수업 시간</title>
+    <link rel="icon" href="./brand-logo.jpg?v=5" type="image/jpeg" />
+    <link rel="stylesheet" href="./styles.css?v=5" />
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="site-header">
+      <a class="brand" href="#/" aria-label="사랑스런 Learn 수업시간 홈" data-smart-home>
+        <span class="brand-mark"><img src="./brand-logo.jpg?v=3" alt="" /></span>
+        <span class="brand-copy">
+          <strong>사랑스런<em>(Learn)</em> 수업시간</strong>
+        </span>
+      </a>
+      <nav class="top-nav" aria-label="주요 메뉴">
+        <a href="#/teacher/login" data-role-link="teacher" hidden>교사 전용</a>
+        <a href="#/student/login" data-role-link="student">학생 로그인</a>
+      </nav>
+      <button class="icon-button mobile-menu" type="button" aria-label="메뉴 열기" data-action="toggle-mobile-menu">
+        <span></span><span></span><span></span>
+      </button>
+    </header>
+
+    <div id="mode-banner" class="mode-banner" hidden>
+      <strong>미리보기 모드</strong>
+      <span>현재 내용은 이 브라우저에만 임시 저장돼요.</span>
+    </div>
+
+    <main id="app" tabindex="-1">
+      <section class="loading-screen" aria-live="polite">
+        <div class="loader"></div>
+        <p>수업 공간을 준비하고 있어요.</p>
+      </section>
+    </main>
+
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="./config.js?v=5"></script>
+    <script src="./api.js?v=5"></script>
+    <script src="./ui.js?v=5"></script>
+    <script src="./teacher.js?v=5"></script>
+    <script src="./student.js?v=5"></script>
+    <script src="./app.js?v=5"></script>
+  </body>
+</html>
