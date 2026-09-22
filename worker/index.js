@@ -1,4 +1,4 @@
-const RELEASE = '2026-09-22-v31';
+const RELEASE = '2026-09-22-v32';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 
 const SCHEMA = `
@@ -953,6 +953,16 @@ async function heartbeat(env, session, payload) {
   }
   const classRow = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
   const result = { version: Number(classRow && classRow.version || 1) };
+  if (session.role === 'student') {
+    const reviewRows = await all(env.DB.prepare(
+      'SELECT id,status,updated_at FROM board_posts WHERE class_id=? AND student_id=? ORDER BY updated_at DESC'
+    ).bind(classId, session.user_id));
+    result.boardReviews = reviewRows.map((row) => ({
+      postId: row.id,
+      status: row.status || 'published',
+      updatedAt: row.updated_at || ''
+    }));
+  }
   if (session.role === 'teacher') {
     const cutoff = new Date(Date.now() - 90000).toISOString();
     const rows = await all(env.DB.prepare(

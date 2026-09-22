@@ -614,21 +614,25 @@
     });
   }
 
+  function studentReviewStateHtml(status) {
+    if (status === 'revision') {
+      return '<div class="moderation-state revision"><strong>수정이 필요해요</strong>' +
+        '<span>이 안내는 선생님과 나에게만 보여요.</span></div>';
+    }
+    if (status === 'confirmed') {
+      return '<div class="moderation-state confirmed"><strong>선생님 확인 완료</strong>' +
+        '<span>이 안내는 선생님과 나에게만 보여요.</span></div>';
+    }
+    return '';
+  }
+
   function openBoardPost(post, board, mine, container, tab) {
-    var privateState = '';
-    if (mine && post.status === 'revision') {
-      privateState = '<div class="moderation-state revision"><strong>수정이 필요해요</strong>' +
-        '<span>이 안내는 선생님과 나에게만 보여요.</span></div>';
-    }
-    if (mine && post.status === 'confirmed') {
-      privateState = '<div class="moderation-state confirmed"><strong>선생님 확인 완료</strong>' +
-        '<span>이 안내는 선생님과 나에게만 보여요.</span></div>';
-    }
+    var privateState = mine ? studentReviewStateHtml(post.status) : '';
     var dialog = UI.modal({
       title: post.studentNumber + '번 ' + post.studentName,
       wide: true,
       html:
-        privateState +
+        '<div data-student-review-state-host>' + privateState + '</div>' +
         '<div class="meta-line"><span>게시 ' + UI.escape(UI.date(post.createdAt, true)) + '</span>' +
           (post.updatedAt !== post.createdAt ? '<span>수정 ' + UI.escape(UI.date(post.updatedAt, true)) + '</span>' : '') +
         '</div>' +
@@ -643,6 +647,8 @@
         } }) +
         (mine && board.status === 'open' ? '<div class="post-owner-actions"><button class="button ghost small" type="button" data-edit-my-post>수정</button></div>' : '')
     });
+    dialog.dataset.studentPostId = post.id;
+    dialog.dataset.studentPostMine = mine ? 'true' : 'false';
     UI.bindFiles(dialog, 'student');
     var edit = dialog.querySelector('[data-edit-my-post]');
     if (edit) edit.addEventListener('click', function () { openBoardEditor(board, post, container, tab); });
@@ -650,10 +656,38 @@
 
   function startHeartbeat(classId) {
     stopHeartbeat();
+    function applyBoardReviews(reviews) {
+      var changed = false;
+      (reviews || []).forEach(function (review) {
+        var post = studentData && studentData.boardPosts.find(function (item) { return item.id === review.postId; });
+        if (!post || post.status === review.status) return;
+        post.status = review.status;
+        post.updatedAt = review.updatedAt || post.updatedAt;
+        var openDialog = document.querySelector('.modal[data-student-post-id="' + review.postId + '"]');
+        if (openDialog && openDialog.dataset.studentPostMine === 'true') {
+          var stateHost = openDialog.querySelector('[data-student-review-state-host]');
+          if (stateHost) stateHost.innerHTML = studentReviewStateHtml(review.status);
+        }
+        changed = true;
+      });
+      return changed;
+    }
+
+    function repaintWithoutJump() {
+      var session = sessionOrLogin();
+      if (!session || !activeContainer || !activeContainer.isConnected) return;
+      var scrollX = window.scrollX;
+      var scrollY = window.scrollY;
+      paintClass(activeContainer, activeTab, session);
+      window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
+    }
+
     function beat() {
       if (heartbeatBusy) return;
       heartbeatBusy = true;
       API.request('heartbeat', { classId: classId }, 'student', 1).then(function (response) {
+        var reviewChanged = applyBoardReviews(response && response.boardReviews);
+        if (reviewChanged) repaintWithoutJump();
         if (studentData && response && Number(response.version) !== Number(studentData.classInfo.version)) {
           return refreshClassSilently();
         }
