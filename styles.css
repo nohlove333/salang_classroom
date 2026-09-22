@@ -2253,3 +2253,17 @@ video {
   font-weight: 700;
   font-style: italic;
 }
+/* 글 목록·공지·과제·보드·학생 관리 탭 정렬 */
+.tab-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 54px;
+  padding: 0 20px;
+  line-height: 1;
+}
+
+.tab-count {
+  margin-left: 0;
+}
