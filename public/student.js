@@ -527,8 +527,8 @@
           keepAttachmentIds: picker.keepAttachmentIds()
         }, 'student', 0);
         UI.closeModal();
+        await refreshClassSilently();
         UI.toast(submission ? '제출물을 수정했습니다.' : '과제를 제출했습니다.');
-        renderClass(container, tab);
       } catch (error) {
         UI.toast(error.message, 'error');
         UI.busy(button, false);
@@ -546,8 +546,8 @@
     if (!yes) return;
     try {
       await API.request('deleteSubmission', { assignmentId: assignmentId }, 'student');
+      await refreshClassSilently();
       UI.toast('제출물을 삭제했습니다.');
-      renderClass(container, tab);
     } catch (error) {
       UI.toast(error.message, 'error');
     }
@@ -587,8 +587,8 @@
           keepAttachmentIds: picker.keepAttachmentIds()
         }, 'student', 0);
         UI.closeModal();
+        await refreshClassSilently();
         UI.toast(post ? '게시글을 수정했습니다.' : '내 카드에 게시했습니다.');
-        renderClass(container, tab);
       } catch (error) {
         UI.toast(error.message, 'error');
         UI.busy(button, false);
@@ -606,8 +606,8 @@
       try {
         await API.request('deleteBoardPost', { postId: post.id }, 'student');
         UI.closeModal();
+        await refreshClassSilently();
         UI.toast('게시글을 삭제했습니다.');
-        renderClass(container, tab);
       } catch (error) {
         UI.toast(error.message, 'error');
       }
