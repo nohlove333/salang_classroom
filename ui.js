@@ -128,6 +128,7 @@
       return '<button class="attachment-preview-card" type="button" data-file-id="' + attr(file.id) +
         '" data-file-role="' + attr(role || '') + '" data-file-json="' +
         attr(encodeURIComponent(JSON.stringify(file))) + '"' +
+        ' data-file-download="' + (settings.allowDownload === false ? 'false' : 'true') + '"' +
         (contextValue ? ' data-preview-context="' + contextValue + '"' : '') +
         (canLoadThumbnail ? ' data-thumbnail-file="true"' : '') + '>' + visual +
         '<span class="attachment-preview-caption"><strong>' + escapeHtml(file.name) + '</strong>' +
@@ -325,21 +326,26 @@
     return url;
   }
 
-  async function resolveFileUrl(file, role) {
+  async function resolveFileUrl(file, role, allowExternalAccess) {
     if (file.publicUrl) return file.publicUrl;
     try {
       var response = await window.LearnAPI.request('getFileContent', { fileId: file.id }, role);
       return blobUrlFromBase64(response);
     } catch (error) {
       if (error.code !== 'FILE_PREVIEW_TOO_LARGE') throw error;
-      var access = await window.LearnAPI.request('prepareFileAccess', { fileId: file.id }, role);
+      if (allowExternalAccess === false) {
+        throw new Error('10MB가 넘는 친구 파일은 안전을 위해 미리보기가 제한됩니다.');
+      }
+      var access = await window.LearnAPI.request('prepareFileAccess', { fileId: file.id, intent: 'preview' }, role);
       return access.data ? blobUrlFromBase64(access) : access.publicUrl;
     }
   }
 
-  async function temporaryAccess(file, role) {
-    if (file.downloadUrl || file.previewUrl || file.publicUrl) return file;
-    return window.LearnAPI.request('prepareFileAccess', { fileId: file.id }, role);
+  async function temporaryAccess(file, role, intent) {
+    var accessIntent = intent || 'preview';
+    if (accessIntent === 'download' && file.downloadUrl) return file;
+    if (accessIntent === 'preview' && (file.previewUrl || file.publicUrl)) return file;
+    return window.LearnAPI.request('prepareFileAccess', { fileId: file.id, intent: accessIntent }, role);
   }
 
   async function downloadAttachment(file, role) {
@@ -360,7 +366,7 @@
       if (pendingWindow) {
         pendingWindow.document.write('<!doctype html><meta charset="utf-8"><title>파일 준비 중</title><p style="font-family:sans-serif;padding:32px">파일을 준비하고 있어요. 이 창을 잠시 그대로 두세요.</p>');
       }
-      var access = await temporaryAccess(file, role);
+      var access = await temporaryAccess(file, role, 'download');
       if (access.data) {
         if (pendingWindow && !pendingWindow.closed) pendingWindow.close();
         window.LearnFiles.saveBase64(access);
@@ -395,27 +401,30 @@
       '</div></section>';
   }
 
-  async function previewAttachment(file, role, context) {
+  async function previewAttachment(file, role, context, allowDownload) {
     var mime = String(file.mimeType || '').toLowerCase();
     var name = String(file.name || '').toLowerCase();
     var isImage = mime.indexOf('image/') === 0;
     var isVideo = mime.indexOf('video/') === 0;
     var isPdf = mime.indexOf('pdf') >= 0 || name.endsWith('.pdf');
     var isOffice = /\.(doc|docx|ppt|pptx|xls|xlsx)$/i.test(name);
+    var mayDownload = allowDownload !== false;
     var dialog = openModal({
       title: file.name || '첨부파일 미리보기',
       wide: true,
       html: previewContextHtml(context) +
         '<div class="preview-stage"><div class="loader"></div></div>' +
-        '<div class="modal-actions"><button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button></div>'
+        (mayDownload
+          ? '<div class="modal-actions"><button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button></div>'
+          : '<div class="download-restricted-note">친구가 올린 파일은 미리보기만 할 수 있어요.</div>')
     });
-    dialog.querySelector('[data-download-file]').addEventListener('click', function () {
-      downloadAttachment(file, role);
-    });
+    var downloadButton = dialog.querySelector('[data-download-file]');
+    if (downloadButton) downloadButton.addEventListener('click', function () { downloadAttachment(file, role); });
     var stage = dialog.querySelector('.preview-stage');
+    if (!mayDownload) stage.addEventListener('contextmenu', function (event) { event.preventDefault(); });
     try {
       if (isImage) {
-        var imageUrl = await resolveFileUrl(file, role);
+        var imageUrl = await resolveFileUrl(file, role, mayDownload);
         stage.innerHTML =
           '<div class="preview-toolbar">' +
             '<button type="button" data-zoom-out aria-label="축소">−</button>' +
@@ -426,44 +435,55 @@
         image.src = imageUrl;
         initImagePanZoom(stage, image);
       } else if (isVideo) {
-        var videoAccess = await temporaryAccess(file, role);
-        var videoUrl = videoAccess.data
-          ? blobUrlFromBase64(videoAccess)
-          : (videoAccess.publicUrl || videoAccess.downloadUrl);
-        stage.innerHTML = '<video controls playsinline src="' + attr(videoUrl) + '"></video>';
+        var videoUrl = mayDownload
+          ? await temporaryAccess(file, role, 'preview').then(function (videoAccess) {
+              return videoAccess.data ? blobUrlFromBase64(videoAccess) : (videoAccess.publicUrl || videoAccess.downloadUrl);
+            })
+          : await resolveFileUrl(file, role, false);
+        stage.innerHTML = '<video controls playsinline ' + (mayDownload ? '' : 'controlsList="nodownload" disablePictureInPicture ') +
+          'src="' + attr(videoUrl) + '"></video>';
       } else if (isPdf) {
-        var documentAccess = await temporaryAccess(file, role);
-        var documentUrl = documentAccess.data
-          ? blobUrlFromBase64(documentAccess)
-          : documentAccess.previewUrl;
+        var documentUrl;
+        if (mayDownload) {
+          var documentAccess = await temporaryAccess(file, role, 'preview');
+          documentUrl = documentAccess.data ? blobUrlFromBase64(documentAccess) : documentAccess.previewUrl;
+        } else {
+          documentUrl = await resolveFileUrl(file, role, false);
+          documentUrl += '#toolbar=0&navpanes=0&scrollbar=1';
+        }
         if (!documentUrl) throw new Error('미리보기 주소를 만들지 못했습니다.');
         stage.innerHTML = '<iframe src="' + attr(documentUrl) + '" title="' + attr(file.name) + ' 미리보기" allow="autoplay"></iframe>';
       } else if (isOffice) {
-        var officeAccess = await temporaryAccess(file, role);
+        if (!mayDownload) {
+          stage.innerHTML = '<div class="preview-message"><strong>이 형식은 안전한 미리보기를 지원하지 않아요.</strong>' +
+            '<p>친구가 올린 Word·PowerPoint·Excel 파일은 내려받을 수 없습니다.</p></div>';
+          return;
+        }
+        var officeAccess = await temporaryAccess(file, role, 'preview');
         if (officeAccess.previewUnsupported || !officeAccess.previewUrl) {
-          stage.innerHTML =
-            '<div class="preview-message"><strong>이 파일은 저장해서 확인해 주세요.</strong>' +
-              '<p>Word·PowerPoint·Excel 파일은 미리보기 모드에서 바로 열리지 않아요. 실제 수업 모드에서는 Google Drive 미리보기가 연결됩니다.</p>' +
-              '<button class="button secondary" type="button" data-stage-download>컴퓨터에 저장</button>' +
-            '</div>';
-          stage.querySelector('[data-stage-download]').addEventListener('click', function () {
-            downloadAttachment(file, role);
-          });
+          stage.innerHTML = mayDownload
+            ? '<div class="preview-message"><strong>이 파일은 저장해서 확인해 주세요.</strong>' +
+                '<p>Word·PowerPoint·Excel 파일은 미리보기 모드에서 바로 열리지 않아요. 실제 수업 모드에서는 Google Drive 미리보기가 연결됩니다.</p>' +
+                '<button class="button secondary" type="button" data-stage-download>컴퓨터에 저장</button></div>'
+            : '<div class="preview-message"><strong>이 형식은 여기서 미리볼 수 없어요.</strong>' +
+                '<p>친구가 올린 파일은 내려받을 수 없습니다.</p></div>';
+          var stageDownload = stage.querySelector('[data-stage-download]');
+          if (stageDownload) stageDownload.addEventListener('click', function () { downloadAttachment(file, role); });
         } else {
           stage.innerHTML = '<iframe src="' + attr(officeAccess.previewUrl) + '" title="' + attr(file.name) + ' 미리보기" allow="autoplay"></iframe>';
         }
       } else {
-        stage.innerHTML =
-          '<div style="padding:30px;color:white;text-align:center">' +
-            '<p>이 파일은 브라우저에서 바로 미리볼 수 없습니다.</p>' +
-            '<button class="button secondary" type="button" data-stage-download>컴퓨터에 저장</button>' +
-          '</div>';
-        stage.querySelector('[data-stage-download]').addEventListener('click', function () {
-          downloadAttachment(file, role);
-        });
+        stage.innerHTML = mayDownload
+          ? '<div style="padding:30px;color:white;text-align:center"><p>이 파일은 브라우저에서 바로 미리볼 수 없습니다.</p>' +
+              '<button class="button secondary" type="button" data-stage-download>컴퓨터에 저장</button></div>'
+          : '<div style="padding:30px;color:white;text-align:center"><p>이 형식은 미리볼 수 없으며, 친구 파일은 내려받을 수 없습니다.</p></div>';
+        var fallbackDownload = stage.querySelector('[data-stage-download]');
+        if (fallbackDownload) fallbackDownload.addEventListener('click', function () { downloadAttachment(file, role); });
       }
     } catch (error) {
-      stage.innerHTML = '<div class="error-box">미리보기를 불러오지 못했습니다. 아래 저장 버튼을 이용해 주세요.</div>';
+      stage.innerHTML = '<div class="error-box">' + (mayDownload
+        ? '미리보기를 불러오지 못했습니다. 아래 저장 버튼을 이용해 주세요.'
+        : '미리보기를 불러오지 못했습니다. 친구 파일은 내려받을 수 없습니다.') + '</div>';
     }
   }
 
@@ -525,7 +545,7 @@
           var context = button.dataset.previewContext
             ? JSON.parse(decodeURIComponent(button.dataset.previewContext))
             : null;
-          previewAttachment(file, button.dataset.fileRole || fallbackRole, context);
+          previewAttachment(file, button.dataset.fileRole || fallbackRole, context, button.dataset.fileDownload !== 'false');
         } catch (error) {
           toast('첨부파일 정보를 읽지 못했습니다.', 'error');
         }

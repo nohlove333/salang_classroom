@@ -244,7 +244,7 @@
         (post
           ? '<div class="tile-content">' + UI.escape((post.text || '첨부파일을 올렸어요.').slice(0, 92)) +
             (post.text && post.text.length > 92 ? '…' : '') + '</div>' +
-            UI.attachmentGallery(post.attachments, 'student', { compact: true, maxItems: 1, context: previewContext }) +
+            UI.attachmentGallery(post.attachments, 'student', { compact: true, maxItems: 1, context: previewContext, allowDownload: mine }) +
             (mine && post.status === 'revision' ? '<div class="tile-review-state revision">수정이 필요해요</div>' : '') +
             (mine && post.status === 'confirmed' ? '<div class="tile-review-state confirmed">선생님 확인 완료</div>' : '')
           : mine && board.status === 'open'
@@ -575,7 +575,7 @@
           (post.updatedAt !== post.createdAt ? '<span>수정 ' + UI.escape(UI.date(post.updatedAt, true)) + '</span>' : '') +
         '</div>' +
         '<div class="detail-body">' + (post.text ? UI.nl2br(post.text) : '<span class="muted-text">작성된 글 없이 파일만 게시했어요.</span>') + '</div>' +
-        UI.attachmentGallery(post.attachments, 'student', { context: {
+        UI.attachmentGallery(post.attachments, 'student', { allowDownload: mine, context: {
           heading: post.studentNumber + '번 ' + post.studentName + '의 글',
           meta: board.title,
           text: post.text || ''

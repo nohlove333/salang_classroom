@@ -479,6 +479,31 @@
     };
   }
 
+  function demoAttachmentOwner(state, fileId) {
+    var collections = [state.announcements, state.assignments, state.boards];
+    for (var i = 0; i < collections.length; i += 1) {
+      if (collections[i].some(function (item) {
+        return (item.attachments || []).some(function (file) { return String(file.id) === String(fileId); });
+      })) return { type: 'teacher' };
+    }
+    var submission = state.submissions.find(function (item) {
+      return (item.attachments || []).some(function (file) { return String(file.id) === String(fileId); });
+    });
+    if (submission) return { type: 'student', studentId: submission.studentId };
+    var post = state.boardPosts.find(function (item) {
+      return (item.attachments || []).some(function (file) { return String(file.id) === String(fileId); });
+    });
+    return post ? { type: 'student', studentId: post.studentId } : null;
+  }
+
+  function demoDownloadAllowed(state, fileId, role) {
+    if (role === 'teacher') return true;
+    var owner = demoAttachmentOwner(state, fileId);
+    var session = readSession('student');
+    return !!owner && (owner.type === 'teacher' ||
+      (session && String(owner.studentId) === String(session.user.id)));
+  }
+
   var DemoAPI = {
     request: async function (action, payload, role) {
       var state = getDemoState();
@@ -856,6 +881,10 @@
       }
 
       if (action === 'prepareFileAccess') {
+        var downloadAllowed = demoDownloadAllowed(state, payload.fileId, role);
+        if (!downloadAllowed) {
+          throw new ApiError('친구가 올린 파일은 미리보기만 할 수 있습니다.', 'DOWNLOAD_FORBIDDEN');
+        }
         var preparedFile = await getDemoFile(payload.fileId);
         return {
           id: String(preparedFile.id),
@@ -863,6 +892,7 @@
           mimeType: String(preparedFile.mimeType),
           size: Number(preparedFile.size || 0),
           data: String(preparedFile.data || ''),
+          downloadAllowed: downloadAllowed,
           previewUnsupported: /\.(doc|docx|ppt|pptx|xls|xlsx)$/i.test(String(preparedFile.name || ''))
         };
       }

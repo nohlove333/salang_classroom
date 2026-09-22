@@ -1245,6 +1245,18 @@ video {
   overflow-wrap: anywhere;
 }
 
+.download-restricted-note {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border: 1px solid #d7c774;
+  border-radius: 8px;
+  background: var(--yellow-soft);
+  color: #675d25;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .presence-panel {
   position: sticky;
   top: 100px;
