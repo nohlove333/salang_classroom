@@ -61,12 +61,6 @@
         renderClass(container, safeTab, true);
       });
   }
-}
-      container.innerHTML = '<section class="page"><div class="panel">' +
-        UI.empty('자료를 불러오지 못했어요', error.message || '잠시 후 다시 시도해 주세요.',
-          '<button class="button" type="button" data-retry>다시 시도</button>') + '</div></section>';
-      container.querySelector('[data-retry]').addEventListener('click', function () { renderClass(container, safeTab); });
-    }
   }
 
   function paintClass(container, tab, session) {
