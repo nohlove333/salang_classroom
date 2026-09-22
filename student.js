@@ -21,17 +21,47 @@
     container.innerHTML = '<section class="loading-screen"><div class="loader"></div><p>우리 반 자료를 불러오고 있어요.</p></section>';
   }
 
-  async function renderClass(container, tab) {
-    var session = sessionOrLogin();
-    if (!session) return;
-    stopHeartbeat();
-    var safeTab = ['posts', 'announcements', 'assignments', 'boards'].indexOf(tab) >= 0 ? tab : 'announcements';
-    loading(container);
-    try {
-      studentData = await API.request('getStudentClass', {}, 'student');
-      paintClass(container, safeTab, session);
-      startHeartbeat(studentData.classInfo.id);
-    } catch (error) {
+  async function renderClass(container, tab, forceRefresh) {
+  var session = sessionOrLogin();
+  if (!session) return;
+
+  stopHeartbeat();
+
+  var safeTab =
+    ['posts', 'announcements', 'assignments', 'boards'].indexOf(tab) >= 0
+      ? tab
+      : 'announcements';
+
+  /* 이미 받은 자료가 있으면 서버에 다시 요청하지 않고 바로 표시 */
+  if (studentData && !forceRefresh) {
+    paintClass(container, safeTab, session);
+    startHeartbeat(studentData.classInfo.id);
+    return;
+  }
+
+  loading(container);
+
+  try {
+    studentData = await API.request('getStudentClass', {}, 'student');
+    paintClass(container, safeTab, session);
+    startHeartbeat(studentData.classInfo.id);
+  } catch (error) {
+    container.innerHTML =
+      '<section class="page"><div class="panel">' +
+      UI.empty(
+        '자료를 불러오지 못했어요',
+        error.message || '잠시 후 다시 시도해 주세요.',
+        '<button class="button" type="button" data-retry>다시 시도</button>'
+      ) +
+      '</div></section>';
+
+    container
+      .querySelector('[data-retry]')
+      .addEventListener('click', function () {
+        renderClass(container, safeTab, true);
+      });
+  }
+}
       container.innerHTML = '<section class="page"><div class="panel">' +
         UI.empty('자료를 불러오지 못했어요', error.message || '잠시 후 다시 시도해 주세요.',
           '<button class="button" type="button" data-retry>다시 시도</button>') + '</div></section>';
