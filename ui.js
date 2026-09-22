@@ -415,17 +415,32 @@
     var isPdf = mime.indexOf('pdf') >= 0 || name.endsWith('.pdf');
     var isOffice = /\.(doc|docx|ppt|pptx|xls|xlsx)$/i.test(name);
     var mayDownload = allowDownload !== false;
+    var editRequest = role === 'student' && context && context.edit ? context.edit : null;
+    var actionButtons = '';
+    if (editRequest) {
+      actionButtons += '<button class="button" type="button" data-edit-from-preview>' +
+        escapeHtml(editRequest.label || '수정') + '</button>';
+    }
+    if (mayDownload) {
+      actionButtons += '<button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button>';
+    }
     var dialog = openModal({
       title: file.name || '첨부파일 미리보기',
       wide: true,
       html: previewContextHtml(context) +
         '<div class="preview-stage"><div class="loader"></div></div>' +
-        (mayDownload
-          ? '<div class="modal-actions"><button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button></div>'
+        (actionButtons
+          ? '<div class="modal-actions">' + actionButtons + '</div>'
           : '<div class="download-restricted-note">친구가 올린 파일은 미리보기만 할 수 있어요.</div>')
     });
     var downloadButton = dialog.querySelector('[data-download-file]');
     if (downloadButton) downloadButton.addEventListener('click', function () { downloadAttachment(file, role); });
+    var editButton = dialog.querySelector('[data-edit-from-preview]');
+    if (editButton) editButton.addEventListener('click', function () {
+      if (window.StudentViews && typeof window.StudentViews.editAttachment === 'function') {
+        window.StudentViews.editAttachment(editRequest);
+      }
+    });
     var stage = dialog.querySelector('.preview-stage');
     if (!mayDownload) stage.addEventListener('contextmenu', function (event) { event.preventDefault(); });
     try {

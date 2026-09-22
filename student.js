@@ -7,6 +7,8 @@
   var selectedBoards = {};
   var heartbeatTimer = null;
   var studentPostFilters = { type: 'all', category: 'all' };
+  var activeContainer = null;
+  var activeTab = 'announcements';
 
   function sessionOrLogin() {
     var session = window.LearnSession.get('student');
@@ -25,12 +27,15 @@
   var session = sessionOrLogin();
   if (!session) return;
 
+  activeContainer = container;
+
   stopHeartbeat();
 
   var safeTab =
     ['posts', 'announcements', 'assignments', 'boards'].indexOf(tab) >= 0
       ? tab
       : 'announcements';
+  activeTab = safeTab;
 
   /* 이미 받은 자료가 있으면 서버에 다시 요청하지 않고 바로 표시 */
   if (studentData && !forceRefresh) {
@@ -221,7 +226,8 @@
     var previewContext = {
       heading: '내가 작성한 글',
       meta: assignment.title,
-      text: submission.text || ''
+      text: submission.text || '',
+      edit: open ? { kind: 'submission', assignmentId: assignment.id, label: '제출 수정' } : null
     };
     return '<div class="submission-card submission-clickable" tabindex="0" role="button" data-view-own-submission="' +
       UI.attr(assignment.id) + '" aria-label="' + UI.attr(assignment.title + ' 내 제출물 상세 보기') + '"><div class="item-top"><div><strong>내 제출물</strong>' +
@@ -259,7 +265,10 @@
       var previewContext = post ? {
         heading: student.number + '번 ' + student.name + '의 글',
         meta: board.title,
-        text: post.text || ''
+        text: post.text || '',
+        edit: mine && board.status === 'open'
+          ? { kind: 'board', boardId: board.id, postId: post.id, label: '게시글 수정' }
+          : null
       } : null;
       return '<article class="student-tile board-feed-card ' + (mine ? 'mine' : '') + '" tabindex="' + (post || mine ? '0' : '-1') +
         '" data-student-card="' + UI.attr(student.id) + '" data-post-id="' + UI.attr(post ? post.id : '') + '">' +
@@ -427,7 +436,8 @@
     var context = {
       heading: '내가 작성한 글',
       meta: assignment.title,
-      text: submission.text || ''
+      text: submission.text || '',
+      edit: open ? { kind: 'submission', assignmentId: assignment.id, label: '제출 수정' } : null
     };
     var dialog = UI.modal({
       title: assignment.title + ' · 내 제출물',
@@ -602,7 +612,10 @@
         UI.attachmentGallery(post.attachments, 'student', { allowDownload: mine, context: {
           heading: post.studentNumber + '번 ' + post.studentName + '의 글',
           meta: board.title,
-          text: post.text || ''
+          text: post.text || '',
+          edit: mine && board.status === 'open'
+            ? { kind: 'board', boardId: board.id, postId: post.id, label: '게시글 수정' }
+            : null
         } }) +
         (mine && board.status === 'open' ? '<div class="post-owner-actions"><button class="button ghost small" type="button" data-edit-my-post>수정</button></div>' : '')
     });
@@ -625,8 +638,40 @@
     heartbeatTimer = null;
   }
 
+  function editAttachmentOwner(request) {
+    if (!request || !studentData || !activeContainer) return;
+    var session = sessionOrLogin();
+    if (!session) return;
+    if (request.kind === 'submission') {
+      var assignment = studentData.assignments.find(function (item) {
+        return item.id === request.assignmentId;
+      });
+      var submission = studentData.submissions.find(function (item) {
+        return item.assignmentId === request.assignmentId && item.studentId === session.user.id;
+      });
+      if (!assignment || !submission || assignment.status !== 'open') {
+        UI.toast('지금은 이 제출물을 수정할 수 없어요.', 'error');
+        return;
+      }
+      openSubmissionEditor(assignment, submission, activeContainer, activeTab);
+      return;
+    }
+    if (request.kind === 'board') {
+      var board = studentData.boards.find(function (item) { return item.id === request.boardId; });
+      var post = studentData.boardPosts.find(function (item) {
+        return item.id === request.postId && item.studentId === session.user.id;
+      });
+      if (!board || !post || board.status !== 'open') {
+        UI.toast('지금은 이 게시글을 수정할 수 없어요.', 'error');
+        return;
+      }
+      openBoardEditor(board, post, activeContainer, activeTab);
+    }
+  }
+
   window.StudentViews = {
     classPage: renderClass,
-    stop: stopHeartbeat
+    stop: stopHeartbeat,
+    editAttachment: editAttachmentOwner
   };
 })();

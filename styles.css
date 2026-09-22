@@ -1,4 +1,4 @@
-@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
+@import url("https://cdn.jsdelivr.net/gh/sun-typeface/SUITE@2/fonts/variable/woff2/SUITE-Variable.css");
 :root {
   color-scheme: light;
   --paper: #fffefe;
@@ -23,8 +23,8 @@
   --shadow-soft: 0 8px 24px rgba(45, 43, 55, 0.07);
   --radius: 18px;
   --radius-sm: 10px;
- --font-ui: "Pretendard Variable", Pretendard, sans-serif;
---font-title: "Gmarket Sans", "Pretendard Variable", sans-serif;
+ --font-ui: "SUITE Variable", SUITE, sans-serif;
+--font-title: "SUITE Variable", SUITE, sans-serif;
   font-family: var(--font-ui);
   font-synthesis: weight style;
   text-rendering: optimizeLegibility;
@@ -2337,8 +2337,8 @@ video {
   --rose-soft: #fff0f1;
   --blue: #b9dce8;
   --blue-soft: #eef8fb;
-  --yellow: #f3dfa2;
-  --yellow-soft: #fff9e9;
+  --yellow: #d8cdef;
+  --yellow-soft: #f6f1fc;
   --mint: #bcded3;
   --mint-soft: #edf8f4;
   --lilac: #d9d3e9;
@@ -2350,15 +2350,16 @@ video {
   --shadow-hover: 0 18px 38px rgba(78, 71, 67, 0.11);
   --radius: 24px;
   --radius-sm: 14px;
-  --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-ui: "SUITE Variable", SUITE, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-title: var(--font-ui);
 }
 
 body {
   background:
-    radial-gradient(circle at 7% 2%, rgba(249, 221, 214, 0.55), transparent 28rem),
-    radial-gradient(circle at 96% 14%, rgba(218, 229, 244, 0.65), transparent 30rem),
-    linear-gradient(135deg, #faf8f5 0%, #f7f8fb 50%, #fbf7f5 100%);
+    radial-gradient(circle at 4% 3%, rgba(255, 215, 228, 0.7), transparent 30rem),
+    radial-gradient(circle at 96% 9%, rgba(207, 231, 255, 0.72), transparent 34rem),
+    radial-gradient(circle at 64% 102%, rgba(208, 244, 233, 0.58), transparent 32rem),
+    linear-gradient(135deg, #fffefe 0%, #fbfdff 48%, #fffafb 100%);
   background-attachment: fixed;
 }
 
@@ -2476,7 +2477,7 @@ body {
 .eyebrow::before {
   height: 3px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--rose), var(--yellow));
+  background: linear-gradient(90deg, var(--rose), var(--blue));
 }
 
 .hero-copy,
@@ -2777,6 +2778,12 @@ body {
   border-radius: 999px;
 }
 
+.status-badge.due {
+  border-color: rgba(140, 119, 178, 0.18);
+  background: var(--yellow-soft);
+  color: #66537f;
+}
+
 .post-filter-bar {
   padding: 14px;
   border-color: rgba(255, 255, 255, 0.72);
@@ -2803,12 +2810,32 @@ body {
 }
 
 .board-grid {
+  position: relative;
+  isolation: isolate;
   gap: 16px;
+}
+
+.board-grid::before {
+  position: absolute;
+  z-index: -1;
+  inset: -18px;
+  border-radius: 34px;
+  background:
+    radial-gradient(circle at 16% 12%, rgba(255, 190, 210, 0.34), transparent 30%),
+    radial-gradient(circle at 82% 30%, rgba(188, 224, 249, 0.4), transparent 34%),
+    radial-gradient(circle at 54% 88%, rgba(190, 235, 220, 0.3), transparent 32%);
+  content: "";
+  filter: blur(28px);
+  pointer-events: none;
 }
 
 .student-tile {
   min-height: 205px;
   padding: 19px;
+  border-color: rgba(255, 255, 255, 0.82);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.3));
+  box-shadow: 0 14px 34px rgba(73, 78, 88, 0.065), inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(22px) saturate(130%);
 }
 
 .student-tile:hover {
@@ -2817,9 +2844,9 @@ body {
 }
 
 .student-tile.mine {
-  border: 1px solid rgba(221, 185, 91, 0.32);
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.86), rgba(255, 249, 222, 0.8));
-  box-shadow: 0 14px 30px rgba(184, 159, 91, 0.09);
+  border: 1px solid rgba(220, 126, 145, 0.3);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.6), rgba(255, 231, 239, 0.3));
+  box-shadow: 0 16px 36px rgba(194, 110, 130, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.86);
 }
 
 .tile-number {
