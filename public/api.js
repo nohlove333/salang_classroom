@@ -229,15 +229,28 @@
         headers: { 'Content-Type': config.provider === 'cloudflare' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8' },
         body: JSON.stringify(body)
       });
-      if (!response.ok) {
-        throw new ApiError('서버 응답이 원활하지 않습니다.', 'HTTP_' + response.status);
+      var result = null;
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        result = null;
       }
-      var result = await response.json();
-      if (!result.ok) {
+      if (!response.ok) {
+        throw new ApiError(
+          result && result.message ? result.message : '서버 응답이 원활하지 않습니다.',
+          result && result.code ? result.code : 'HTTP_' + response.status,
+          result && result.details ? result.details : null
+        );
+      }
+      if (!result || !result.ok) {
         if (result.code === 'SESSION_EXPIRED' || result.code === 'UNAUTHORIZED') {
           if (role) writeSession(role, null);
         }
-        throw new ApiError(result.message, result.code, result.details);
+        throw new ApiError(
+          result && result.message ? result.message : '서버 응답을 확인하지 못했습니다.',
+          result && result.code ? result.code : 'INVALID_RESPONSE',
+          result && result.details ? result.details : null
+        );
       }
       return result.data;
     } catch (error) {
