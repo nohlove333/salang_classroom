@@ -1,1 +1,40 @@
-# salang_classroom
+# 사랑스런(Learn) 수업시간 — Cloudflare 고속 버전
+
+기존 화면 구조와 디자인은 유지하고, 느린 Google Apps Script 백엔드를 Cloudflare로 교체한 버전입니다.
+
+## 저장 위치
+
+- 홈페이지: Cloudflare Workers Static Assets
+- 교사·클래스·학생·글: Cloudflare D1
+- 첨부파일: Cloudflare R2
+- 로그인 세션: Cloudflare D1
+
+첨부파일은 Base64 문자열로 변환하지 않고 R2에 바로 업로드합니다. 화면은 15초마다 작은 변경번호만 확인하고, 변경된 경우에만 새 자료를 받아옵니다.
+
+## 처음 배포하기
+
+1. 이 폴더의 **내용 전체**를 GitHub 저장소 최상위에 올립니다.
+2. [Cloudflare 대시보드](https://dash.cloudflare.com/)에서 `Workers & Pages`를 엽니다.
+3. `Create application` → `Import a repository`를 선택합니다.
+4. GitHub의 `salang_classroom` 저장소를 연결합니다.
+5. Worker 이름은 `salang-classroom`으로 지정합니다. `wrangler.jsonc`의 이름과 같아야 합니다.
+6. 배포 명령은 `npm run deploy`로 지정하고 `Save and Deploy`를 누릅니다.
+7. 첫 배포가 끝나면 Worker의 `Settings` → `Variables & Secrets`로 이동합니다.
+8. 런타임 암호 변수 `TEACHER_SETUP_KEY`를 추가합니다. 20자 이상의 추측하기 어려운 값으로 정하고 `Encrypt`를 켭니다.
+9. 다시 배포한 뒤 아래 주소로 교사 계정을 처음 만듭니다.
+
+   `https://내주소.workers.dev/#/teacher/signup`
+
+교사 회원가입을 처음 실행할 때 D1 표가 자동 생성됩니다. 학생에게는 Worker 기본 주소만 전달하면 되고, 클래스 코드는 자동 입력되지 않습니다.
+
+## 이후 자동 배포
+
+Cloudflare와 GitHub를 연결한 뒤에는 GitHub에 새 파일을 올릴 때마다 자동으로 새 버전이 배포됩니다.
+
+## 무료 사용량 주의
+
+현재 수업 규모에서는 무료 범위 안에서 사용할 수 있도록 요청 수를 줄여 설계했습니다. R2 무료 저장공간이 가득 차기 전에 오래된 첨부파일을 내려받거나 별도 보관하는 것이 좋습니다.
+
+## 기존 Apps Script 자료
+
+Cloudflare는 별도의 새 저장소이므로 기존 Apps Script·Google Drive 자료가 자동으로 복사되지는 않습니다. 실제 수업 자료가 이미 있다면 기존 사이트를 바로 삭제하지 말고, 자료 이전을 마친 뒤 학생 링크를 Cloudflare 주소로 바꾸세요.
