@@ -2231,3 +2231,6 @@ video {
   outline: 3px solid rgba(59, 139, 176, 0.55);
   outline-offset: 3px;
 }
+.mode-banner[hidden] {
+  display: none !important;
+}
