@@ -1,5 +1,4 @@
 const SCHEMA = `
-PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS teachers (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
