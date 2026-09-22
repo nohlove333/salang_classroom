@@ -1,3 +1,5 @@
+const RELEASE = '2026-09-22-v27';
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
   id TEXT PRIMARY KEY,
@@ -230,7 +232,19 @@ function errorResponse(error, request) {
 }
 
 async function ensureSchema(env) {
-  await env.DB.exec(SCHEMA);
+  const statements = SCHEMA.split(';').map((statement) => statement.trim()).filter(Boolean);
+  for (let index = 0; index < statements.length; index += 1) {
+    try {
+      await env.DB.prepare(statements[index]).run();
+    } catch (error) {
+      const reason = String(error && error.message || '알 수 없는 D1 오류').slice(0, 300);
+      throw new AppError(
+        `데이터베이스 초기화 ${index + 1}단계에서 실패했습니다: ${reason}`,
+        'DATABASE_SETUP_FAILED',
+        500
+      );
+    }
+  }
 }
 
 async function schemaReady(env) {
@@ -1144,7 +1158,7 @@ export default {
     }
     try {
       if (url.pathname === '/api/health') {
-        return ok({ status: 'ok', databaseReady: await schemaReady(env), provider: 'cloudflare' }, request);
+        return ok({ status: 'ok', databaseReady: await schemaReady(env), provider: 'cloudflare', release: RELEASE }, request);
       }
       if (url.pathname === '/api/upload' && request.method === 'POST') {
         return ok(await handleUpload(request, env), request);
