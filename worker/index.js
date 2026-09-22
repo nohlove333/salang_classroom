@@ -1,4 +1,4 @@
-const RELEASE = '2026-09-22-v27';
+const RELEASE = '2026-09-22-v28';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -115,6 +115,22 @@ CREATE TABLE IF NOT EXISTS attachments (
   FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS attachments_owner ON attachments(owner_type, owner_id, sort_order);
+CREATE TABLE IF NOT EXISTS drive_archives (
+  id TEXT PRIMARY KEY,
+  teacher_id TEXT NOT NULL,
+  class_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  original_file_id TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  archive_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  drive_file_id TEXT NOT NULL,
+  drive_url TEXT NOT NULL,
+  archived_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS drive_archives_class ON drive_archives(class_id, archived_at);
 `;
 
 class AppError extends Error {
@@ -995,6 +1011,19 @@ function safeFilePart(value) {
   return String(value || '파일').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 80) || '파일';
 }
 
+function driveArchiveName(title, studentNumber, originalValue) {
+  const original = String(originalValue || '첨부파일')
+    .replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim() || '첨부파일';
+  const dot = original.lastIndexOf('.');
+  const extension = dot > 0 && original.length - dot <= 12 ? original.slice(dot) : '';
+  const originalBase = extension ? original.slice(0, dot) : original;
+  const titlePart = safeFilePart(title || '자료');
+  const numberPart = Number(studentNumber || 0) > 0 ? `_${Number(studentNumber)}번` : '';
+  const fixedPrefix = `${titlePart}${numberPart}_`;
+  const available = Math.max(20, 180 - fixedPrefix.length - extension.length);
+  return `${fixedPrefix}${originalBase.slice(0, available)}${extension}`;
+}
+
 async function createDownloadBundle(env, request, session, payload) {
   const classRow = await ownedClass(env, session, payload.classId);
   const kind = String(payload.kind || '');
@@ -1033,6 +1062,154 @@ async function createDownloadBundle(env, request, session, payload) {
   return { files, fileCount: files.length, zipName: `${title}_전체.zip` };
 }
 
+async function ensureDriveArchiveSchema(env) {
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS drive_archives (' +
+      'id TEXT PRIMARY KEY,teacher_id TEXT NOT NULL,class_id TEXT NOT NULL,' +
+      'owner_type TEXT NOT NULL,owner_id TEXT NOT NULL,original_file_id TEXT NOT NULL,' +
+      'original_name TEXT NOT NULL,archive_name TEXT NOT NULL,mime_type TEXT NOT NULL,' +
+      'size INTEGER NOT NULL,drive_file_id TEXT NOT NULL,drive_url TEXT NOT NULL,archived_at TEXT NOT NULL)'
+  ).run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS drive_archives_class ON drive_archives(class_id, archived_at)').run();
+}
+
+async function driveArchiveContext(env, session, fileId) {
+  const row = await env.DB.prepare(
+    'SELECT f.*,a.owner_type,a.owner_id FROM files f JOIN attachments a ON a.file_id=f.id WHERE f.id=?'
+  ).bind(String(fileId || '')).first();
+  if (!row) throw new AppError('이미 보관했거나 찾을 수 없는 파일입니다.', 'FILE_NOT_FOUND', 404);
+
+  let classId = '';
+  let title = '자료';
+  let studentNumber = 0;
+  if (row.owner_type === 'content') {
+    const owner = await env.DB.prepare('SELECT class_id,title FROM contents WHERE id=?').bind(row.owner_id).first();
+    if (owner) {
+      classId = owner.class_id;
+      title = owner.title || title;
+    }
+  } else if (row.owner_type === 'submission') {
+    const owner = await env.DB.prepare(
+      'SELECT s.class_id,s.student_number,c.title FROM submissions s JOIN contents c ON c.id=s.assignment_id WHERE s.id=?'
+    ).bind(row.owner_id).first();
+    if (owner) {
+      classId = owner.class_id;
+      title = owner.title || '과제';
+      studentNumber = Number(owner.student_number || 0);
+    }
+  } else if (row.owner_type === 'board_post') {
+    const owner = await env.DB.prepare(
+      'SELECT p.class_id,p.student_number,c.title FROM board_posts p JOIN contents c ON c.id=p.board_id WHERE p.id=?'
+    ).bind(row.owner_id).first();
+    if (owner) {
+      classId = owner.class_id;
+      title = owner.title || '보드';
+      studentNumber = Number(owner.student_number || 0);
+    }
+  }
+  if (!classId) throw new AppError('파일 연결 정보를 찾을 수 없습니다.', 'FILE_NOT_FOUND', 404);
+  await ownedClass(env, session, classId);
+
+  return {
+    row,
+    classId,
+    archiveName: driveArchiveName(title, studentNumber, row.name)
+  };
+}
+
+async function sendFileToDrive(env, request, session, fileId) {
+  const context = await driveArchiveContext(env, session, fileId);
+  const sourceUrl = await signedFileUrl(env, request, context.row, 'download');
+  let response;
+  try {
+    response = await fetch(String(env.DRIVE_ARCHIVE_URL), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        archiveKey: String(env.DRIVE_ARCHIVE_KEY),
+        sourceUrl,
+        fileName: context.archiveName,
+        mimeType: context.row.mime_type || 'application/octet-stream',
+        sourceFileId: context.row.id
+      }),
+      redirect: 'follow'
+    });
+  } catch (_) {
+    throw new AppError('Google Drive 보관 서버에 연결하지 못했습니다.', 'DRIVE_UNAVAILABLE', 502);
+  }
+  const responseText = await response.text();
+  let result;
+  try {
+    result = JSON.parse(responseText);
+  } catch (_) {
+    throw new AppError('Google Drive 보관 서버 설정을 확인해 주세요.', 'DRIVE_INVALID_RESPONSE', 502);
+  }
+  if (!response.ok || !result.ok || !result.data || !result.data.driveFileId) {
+    throw new AppError(result.message || 'Google Drive로 파일을 옮기지 못했습니다.', result.code || 'DRIVE_ARCHIVE_FAILED', 502);
+  }
+
+  const archivedAt = nowIso();
+  await env.DB.batch([
+    env.DB.prepare(
+      'INSERT INTO drive_archives(id,teacher_id,class_id,owner_type,owner_id,original_file_id,original_name,archive_name,mime_type,size,drive_file_id,drive_url,archived_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)'
+    ).bind(
+      uid('arc'), session.user_id, context.classId, context.row.owner_type, context.row.owner_id,
+      context.row.id, context.row.name, context.archiveName, context.row.mime_type || 'application/octet-stream',
+      Number(context.row.size || 0), result.data.driveFileId, result.data.driveUrl || '', archivedAt
+    ),
+    env.DB.prepare('DELETE FROM attachments WHERE file_id=?').bind(context.row.id),
+    env.DB.prepare('DELETE FROM files WHERE id=?').bind(context.row.id)
+  ]);
+  try {
+    await env.FILES.delete(context.row.r2_key);
+  } catch (error) {
+    console.error('R2 archive cleanup failed', context.row.r2_key, error);
+  }
+  return {
+    fileId: context.row.id,
+    archiveName: context.archiveName,
+    driveFileId: result.data.driveFileId,
+    driveUrl: result.data.driveUrl || '',
+    classId: context.classId
+  };
+}
+
+async function archiveFilesToDrive(env, request, session, payload) {
+  if (!env.DRIVE_ARCHIVE_URL || !env.DRIVE_ARCHIVE_KEY) {
+    throw new AppError('Google Drive 보관 연결이 아직 설정되지 않았습니다.', 'DRIVE_NOT_CONFIGURED', 503);
+  }
+  const fileIds = Array.from(new Set((payload.fileIds || []).map((value) => String(value || '')).filter(Boolean)));
+  if (!fileIds.length) throw new AppError('보관할 파일을 선택해 주세요.', 'NO_FILES');
+  if (fileIds.length > 25) throw new AppError('한 번에 25개까지 보관할 수 있습니다.', 'TOO_MANY_FILES');
+  await ensureDriveArchiveSchema(env);
+
+  const archived = [];
+  const failed = [];
+  const touchedClasses = new Set();
+  for (const fileId of fileIds) {
+    try {
+      const item = await sendFileToDrive(env, request, session, fileId);
+      archived.push(item);
+      touchedClasses.add(item.classId);
+    } catch (error) {
+      failed.push({
+        fileId,
+        message: error instanceof AppError ? error.message : '보관 중 오류가 발생했습니다.'
+      });
+    }
+  }
+  for (const classId of touchedClasses) await touchClass(env, classId);
+  if (!archived.length && failed.length) {
+    throw new AppError(failed[0].message, 'DRIVE_ARCHIVE_FAILED', 502, { failed });
+  }
+  return {
+    archived,
+    failed,
+    archivedCount: archived.length,
+    failedCount: failed.length
+  };
+}
+
 async function handleAction(request, env) {
   let body;
   try {
@@ -1049,7 +1226,7 @@ async function handleAction(request, env) {
   const teacherActions = new Set([
     'teacherDashboard', 'createClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
-    'deleteStudent', 'reviewBoardPost', 'createDownloadBundle'
+    'deleteStudent', 'reviewBoardPost', 'createDownloadBundle', 'archiveFilesToDrive'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost']);
   let role = '';
@@ -1081,6 +1258,7 @@ async function handleAction(request, env) {
     case 'prepareFileAccess': return prepareFileAccess(env, request, session, payload);
     case 'getFileContent': return prepareFileAccess(env, request, session, { fileId: payload.fileId, intent: 'preview' });
     case 'createDownloadBundle': return createDownloadBundle(env, request, session, payload);
+    case 'archiveFilesToDrive': return archiveFilesToDrive(env, request, session, payload);
     default: throw new AppError(`지원하지 않는 요청입니다: ${action}`, 'UNKNOWN_ACTION', 404);
   }
 }

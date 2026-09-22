@@ -411,6 +411,26 @@
       '</div></section>';
   }
 
+  async function archiveAttachment(file, button) {
+    var yes = await confirmDialog({
+      title: 'Google Drive로 보관',
+      message: '보관에 성공하면 이 파일은 수업 홈페이지에서 제거되고 지정한 Google Drive 폴더로 이동합니다.',
+      confirmText: 'Drive로 보관'
+    });
+    if (!yes) return;
+    try {
+      if (button) setBusy(button, true, '보관 중…');
+      var response = await window.LearnAPI.request('archiveFilesToDrive', { fileIds: [file.id] }, 'teacher', 0);
+      if (!response.archivedCount) throw new Error('파일을 보관하지 못했습니다.');
+      toast('Google Drive로 보관했습니다.');
+      window.dispatchEvent(new CustomEvent('learn:drive-archived', {
+        detail: { fileIds: [file.id], archivedCount: response.archivedCount }
+      }));
+    } catch (error) {
+      toast(error.message || 'Google Drive로 보관하지 못했습니다.', 'error');
+    }
+  }
+
   async function previewAttachment(file, role, context, allowDownload) {
     var mime = String(file.mimeType || '').toLowerCase();
     var name = String(file.name || '').toLowerCase();
@@ -428,6 +448,9 @@
     if (mayDownload) {
       actionButtons += '<button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button>';
     }
+    if (role === 'teacher' && mayDownload) {
+      actionButtons += '<button class="button soft" type="button" data-archive-file>Google Drive로 보관</button>';
+    }
     var dialog = openModal({
       title: file.name || '첨부파일 미리보기',
       wide: true,
@@ -439,6 +462,8 @@
     });
     var downloadButton = dialog.querySelector('[data-download-file]');
     if (downloadButton) downloadButton.addEventListener('click', function () { downloadAttachment(file, role); });
+    var archiveButton = dialog.querySelector('[data-archive-file]');
+    if (archiveButton) archiveButton.addEventListener('click', function () { archiveAttachment(file, archiveButton); });
     var editButton = dialog.querySelector('[data-edit-from-preview]');
     if (editButton) editButton.addEventListener('click', function () {
       if (window.StudentViews && typeof window.StudentViews.editAttachment === 'function') {

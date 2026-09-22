@@ -35,6 +35,18 @@ Cloudflare와 GitHub를 연결한 뒤에는 GitHub에 새 파일을 올릴 때�
 
 현재 수업 규모에서는 무료 범위 안에서 사용할 수 있도록 요청 수를 줄여 설계했습니다. R2 무료 저장공간이 가득 차기 전에 오래된 첨부파일을 내려받거나 별도 보관하는 것이 좋습니다.
 
+## Google Drive로 오래된 파일 보관
+
+교사 화면에서 오래된 첨부파일을 선택해 Google Drive로 옮길 수 있습니다. 평소 수업 기능은 계속 Cloudflare를 사용하고, 교사가 보관 버튼을 누를 때만 Apps Script가 실행되므로 학생 화면 속도에는 영향을 주지 않습니다.
+
+연결 방법은 [`apps-script-drive-archive/README.md`](./apps-script-drive-archive/README.md)를 따르세요. 현재 보관 폴더는 사용자가 지정한 Drive 폴더 ID `1tQ1zNZTnlCQymzYAYL1HzjA4jjcuvwFb`로 설정되어 있습니다.
+
+- 개별 첨부파일: 미리보기 창의 `Google Drive로 보관`
+- 과제 제출물: 제출물 창의 `Drive로 일괄 보관`
+- 보드 게시물: 보드 창의 `Drive로 일괄 보관`
+
+보관 파일명은 `과제명_학번_원본파일명` 또는 `보드명_학번_원본파일명` 형식입니다. Drive 복사가 확인된 파일만 R2에서 제거되며, 실패한 파일은 원본을 유지합니다.
+
 ## 기존 Apps Script 자료
 
 Cloudflare는 별도의 새 저장소이므로 기존 Apps Script·Google Drive 자료가 자동으로 복사되지는 않습니다. 실제 수업 자료가 이미 있다면 기존 사이트를 바로 삭제하지 말고, 자료 이전을 마친 뒤 학생 링크를 Cloudflare 주소로 바꾸세요.

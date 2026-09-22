@@ -964,9 +964,15 @@
     var assignment = classData.assignments.find(function (item) { return item.id === assignmentId; });
     var submissions = classData.submissions.filter(function (item) { return item.assignmentId === assignmentId; })
       .sort(function (a, b) { return Number(a.studentNumber) - Number(b.studentNumber); });
+    var submissionFiles = submissions.reduce(function (files, submission) {
+      return files.concat(submission.attachments || []);
+    }, []);
     var html =
       '<div class="content-head"><div><p style="margin:0">제출 ' + submissions.length + '/' + classData.students.length + '명</p></div>' +
-        '<button class="button" type="button" data-download-all ' + (!submissions.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button></div>';
+        '<div class="modal-actions" style="margin-top:0">' +
+          '<button class="button secondary" type="button" data-archive-all ' + (!submissionFiles.length ? 'disabled' : '') + '>Drive로 일괄 보관</button>' +
+          '<button class="button" type="button" data-download-all ' + (!submissionFiles.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button>' +
+        '</div></div>';
     if (!submissions.length) {
       html += UI.empty('아직 제출물이 없어요', '학생이 과제를 제출하면 이곳에 표시됩니다.');
     } else {
@@ -1007,6 +1013,10 @@
     if (downloadAll) downloadAll.addEventListener('click', function () {
       createBundle(downloadAll, 'assignment', assignment.id, assignment.title, classId);
     });
+    var archiveAll = dialog.querySelector('[data-archive-all]');
+    if (archiveAll) archiveAll.addEventListener('click', function () {
+      archiveFilesToDrive(archiveAll, submissionFiles, assignment.title + ' 제출물', classId);
+    });
   }
 
   function openTeacherSubmissionDetail(submission, assignment, classId, container, tab) {
@@ -1039,6 +1049,9 @@
   function openTeacherBoard(boardId, classId, container, tab) {
     var board = classData.boards.find(function (item) { return item.id === boardId; });
     var posts = classData.boardPosts.filter(function (item) { return item.boardId === boardId; });
+    var boardFiles = posts.reduce(function (files, post) {
+      return files.concat(post.attachments || []);
+    }, []);
     var byStudent = {};
     posts.forEach(function (post) { byStudent[post.studentId] = post; });
     var cards = classData.students.map(function (student) {
@@ -1067,7 +1080,10 @@
           '<span class="status-badge ' + (board.status === 'open' ? 'open' : '') + '">' +
             (board.status === 'open' ? '작성 가능' : '읽기 전용') + '</span></div>' +
         '<div class="content-head"><div><p>' + UI.escape(board.body || '') + '</p></div>' +
-          '<button class="button secondary" type="button" data-board-download ' + (!posts.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button></div>' +
+          '<div class="modal-actions" style="margin-top:0">' +
+            '<button class="button soft" type="button" data-board-archive ' + (!boardFiles.length ? 'disabled' : '') + '>Drive로 일괄 보관</button>' +
+            '<button class="button secondary" type="button" data-board-download ' + (!boardFiles.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button>' +
+          '</div></div>' +
         UI.attachments(board.attachments, 'teacher') +
         '<div class="board-grid" style="margin-top:20px">' + cards + '</div>'
     });
@@ -1075,6 +1091,10 @@
     var bundleButton = dialog.querySelector('[data-board-download]');
     if (bundleButton) bundleButton.addEventListener('click', function () {
       createBundle(bundleButton, 'board', board.id, board.title, classId);
+    });
+    var boardArchiveButton = dialog.querySelector('[data-board-archive]');
+    if (boardArchiveButton) boardArchiveButton.addEventListener('click', function () {
+      archiveFilesToDrive(boardArchiveButton, boardFiles, board.title + ' 보드 파일', classId);
     });
     dialog.querySelectorAll('[data-teacher-post]').forEach(function (tile) {
       tile.addEventListener('click', function (event) {
@@ -1231,6 +1251,43 @@
     }
   }
 
+  async function archiveFilesToDrive(button, files, label, classId) {
+    var fileIds = Array.from(new Set((files || []).map(function (file) { return file.id; }).filter(Boolean)));
+    if (!fileIds.length) {
+      UI.toast('보관할 첨부파일이 없습니다.', 'error');
+      return;
+    }
+    var yes = await UI.confirm({
+      title: 'Google Drive로 일괄 보관',
+      message: label + ' ' + fileIds.length + '개를 Google Drive로 옮길까요? 성공한 파일은 수업 홈페이지에서 제거됩니다.',
+      confirmText: 'Drive로 보관'
+    });
+    if (!yes) return;
+    var archivedCount = 0;
+    var failedCount = 0;
+    try {
+      UI.busy(button, true, 'Drive 보관 중…');
+      for (var start = 0; start < fileIds.length; start += 25) {
+        var response = await API.request('archiveFilesToDrive', {
+          fileIds: fileIds.slice(start, start + 25)
+        }, 'teacher', 0);
+        archivedCount += Number(response.archivedCount || 0);
+        failedCount += Number(response.failedCount || 0);
+      }
+      UI.closeModal();
+      await renderClass(activeClassContainer, classId, activeClassTab, true);
+      if (failedCount) {
+        UI.toast(archivedCount + '개는 보관했고 ' + failedCount + '개는 원본을 유지했습니다.', 'error');
+      } else {
+        UI.toast(archivedCount + '개 파일을 Google Drive로 보관했습니다.');
+      }
+    } catch (error) {
+      UI.toast(error.message || 'Google Drive 일괄 보관에 실패했습니다.', 'error');
+      UI.busy(button, false);
+      if (archivedCount) await renderClass(activeClassContainer, classId, activeClassTab, true);
+    }
+  }
+
   function startPresence(classId) {
     stopPresence();
     function heartbeat() {
@@ -1256,6 +1313,12 @@
     presenceTimer = null;
     presenceBusy = false;
   }
+
+  window.addEventListener('learn:drive-archived', function () {
+    if (activeClassContainer && classDataId) {
+      renderClass(activeClassContainer, classDataId, activeClassTab, true);
+    }
+  });
 
   window.TeacherViews = {
     dashboard: renderDashboard,
