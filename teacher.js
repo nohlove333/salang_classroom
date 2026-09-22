@@ -3,7 +3,9 @@
 
   var UI = window.LearnUI;
   var API = window.LearnAPI;
+  var dashboardData = null;
   var classData = null;
+  var classDataId = '';
   var presenceTimer = null;
   var classSortStorageKey = 'learn_teacher_class_sort_v1';
   var teacherPostFilters = { type: 'all', category: 'all' };
@@ -43,14 +45,27 @@
     container.querySelector('[data-retry]').addEventListener('click', retry);
   }
 
-  async function renderDashboard(container) {
+  async function renderDashboard(container, forceRefresh) {
     if (!sessionOrLogin()) return;
     stopPresence();
+    if (dashboardData && !forceRefresh) {
+      paintDashboard(container, dashboardData);
+      return;
+    }
     loading(container, '클래스 목록을 불러오고 있어요.');
     try {
       var data = await API.request('teacherDashboard', {}, 'teacher');
-      var sortMode = classSortMode();
-      container.innerHTML =
+      dashboardData = data;
+      paintDashboard(container, data);
+    } catch (error) {
+      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
+      errorScreen(container, error, function () { renderDashboard(container, true); });
+    }
+  }
+
+  function paintDashboard(container, data) {
+    var sortMode = classSortMode();
+    container.innerHTML =
         '<section class="app-page">' +
           '<div class="dashboard-head">' +
             '<div class="section-title"><p class="section-kicker">Teacher studio</p>' +
@@ -71,10 +86,13 @@
             ? classSortToolbar(sortMode) + renderClassCollection(data.classes, sortMode)
             : '<div class="panel">' + UI.empty('첫 클래스를 만들어 보세요', '클래스 코드와 이름을 정하면 바로 학생을 등록할 수 있어요.', '<button class="button" type="button" data-create-class>클래스 만들기</button>') + '</div>') +
         '</section>';
-      container.querySelectorAll('[data-create-class]').forEach(function (button) {
+    container.querySelectorAll('[data-create-class]').forEach(function (button) {
         button.addEventListener('click', function () { openClassEditor(container); });
       });
       container.querySelector('[data-logout]').addEventListener('click', function () {
+        dashboardData = null;
+        classData = null;
+        classDataId = '';
         window.LearnSession.clear('teacher');
         if (window.LearnNavigation) window.LearnNavigation.clear('teacher');
         location.hash = '#/teacher/login';
@@ -103,16 +121,12 @@
           renderDashboard(container);
         });
       });
-      container.querySelectorAll('[data-class-move]').forEach(function (button) {
+    container.querySelectorAll('[data-class-move]').forEach(function (button) {
         button.addEventListener('click', function (event) {
           event.stopPropagation();
           moveClass(button, data.classes, container);
         });
       });
-    } catch (error) {
-      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
-      errorScreen(container, error, function () { renderDashboard(container); });
-    }
   }
 
   function summaryCell(label, number) {
@@ -206,7 +220,7 @@
       await API.request('reorderClasses', {
         classIds: ordered.map(function (item) { return item.id; })
       }, 'teacher');
-      renderDashboard(container);
+      renderDashboard(container, true);
     } catch (error) {
       UI.toast(error.message, 'error');
       UI.busy(button, false);
@@ -245,7 +259,7 @@
         }, 'teacher');
         UI.closeModal();
         UI.toast('클래스를 만들었습니다.');
-        renderDashboard(container);
+        renderDashboard(container, true);
       } catch (error) {
         UI.toast(error.message, 'error');
         UI.busy(submit, false);
@@ -265,23 +279,30 @@
     try {
       await API.request('deleteClass', { classId: classId, confirmCode: String(typed).trim().toUpperCase() }, 'teacher');
       UI.toast('클래스를 삭제했습니다.');
-      renderDashboard(container);
+      renderDashboard(container, true);
     } catch (error) {
       UI.toast(error.message, 'error');
     }
   }
 
-  async function renderClass(container, classId, tab) {
+  async function renderClass(container, classId, tab, forceRefresh) {
     if (!sessionOrLogin()) return;
     stopPresence();
     var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
+    if (classData && classDataId === String(classId) && !forceRefresh) {
+      paintClass(container, classId, safeTab);
+      startPresence(classId);
+      return;
+    }
+    if (forceRefresh) dashboardData = null;
     loading(container, '클래스 자료를 불러오고 있어요.');
     try {
       classData = await API.request('getTeacherClass', { classId: classId }, 'teacher');
+      classDataId = String(classId);
       paintClass(container, classId, safeTab);
       startPresence(classId);
     } catch (error) {
-      errorScreen(container, error, function () { renderClass(container, classId, safeTab); });
+      errorScreen(container, error, function () { renderClass(container, classId, safeTab, true); });
     }
   }
 
@@ -335,7 +356,7 @@
       shareStudentLink(classData.classInfo);
     });
     container.querySelector('[data-refresh]').addEventListener('click', function () {
-      renderClass(container, classId, tab);
+      renderClass(container, classId, tab, true);
     });
     bindTabActions(container, classId, tab);
     UI.bindFiles(container, 'teacher');
@@ -691,7 +712,7 @@
         }, 'teacher', 0);
         UI.closeModal();
         UI.toast((item ? '수정' : '등록') + '했습니다.');
-        renderClass(container, classId, tab);
+        renderClass(container, classId, tab, true);
       } catch (error) {
         UI.toast(error.message, 'error');
         UI.busy(button, false);
@@ -713,7 +734,7 @@
     try {
       await API.request('deleteContent', { type: type, id: id, classId: classId }, 'teacher');
       UI.toast('삭제했습니다.');
-      renderClass(container, classId, tab);
+      renderClass(container, classId, tab, true);
     } catch (error) {
       UI.toast(error.message, 'error');
     }
@@ -753,7 +774,7 @@
           names: names
         }, 'teacher');
         showIssuedPins(response.students, classData.classInfo.code, function () {
-          renderClass(container, classId, tab);
+          renderClass(container, classId, tab, true);
         });
       } catch (error) {
         UI.toast(error.message, 'error');
@@ -803,7 +824,7 @@
     try {
       var response = await API.request('reissueClassPins', { classId: classId }, 'teacher', 0);
       showIssuedPins(response.students, classData.classInfo.code, function () {
-        renderClass(container, classId, tab);
+        renderClass(container, classId, tab, true);
       });
     } catch (error) {
       UI.toast(error.message, 'error');
@@ -928,7 +949,7 @@
     try {
       await API.request('deleteStudent', { studentId: studentId, classId: classId }, 'teacher');
       UI.toast('학생을 삭제했습니다.');
-      renderClass(container, classId, tab);
+      renderClass(container, classId, tab, true);
     } catch (error) {
       UI.toast(error.message, 'error');
     }
