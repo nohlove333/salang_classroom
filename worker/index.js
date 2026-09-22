@@ -1,4 +1,5 @@
-const RELEASE = '2026-09-22-v28';
+const RELEASE = '2026-09-22-v29';
+const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -608,6 +609,7 @@ async function teacherDashboard(env, session) {
   return {
     teacher,
     classes,
+    storage: await fileStorageStatus(env),
     totals: {
       classes: classes.length,
       students: classes.reduce((sum, item) => sum + item.studentCount, 0),
@@ -618,6 +620,23 @@ async function teacherDashboard(env, session) {
         "SELECT COUNT(*) AS total FROM contents c JOIN classes k ON k.id=c.class_id WHERE k.teacher_id=? AND c.type='board'"
       ).bind(session.user_id).first()).total || 0)
     }
+  };
+}
+
+async function fileStorageStatus(env) {
+  const row = await env.DB.prepare('SELECT COALESCE(SUM(size),0) AS used_bytes,COUNT(*) AS file_count FROM files').first();
+  const usedBytes = Number(row && row.used_bytes || 0);
+  const percent = Math.min(999, Math.round((usedBytes / FREE_R2_STORAGE_BYTES) * 1000) / 10);
+  let level = 'normal';
+  if (percent >= 95) level = 'critical';
+  else if (percent >= 85) level = 'warning';
+  else if (percent >= 70) level = 'notice';
+  return {
+    usedBytes,
+    fileCount: Number(row && row.file_count || 0),
+    guideBytes: FREE_R2_STORAGE_BYTES,
+    percent,
+    level
   };
 }
 
@@ -1226,7 +1245,7 @@ async function handleAction(request, env) {
   const teacherActions = new Set([
     'teacherDashboard', 'createClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
-    'deleteStudent', 'reviewBoardPost', 'createDownloadBundle', 'archiveFilesToDrive'
+    'deleteStudent', 'reviewBoardPost', 'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost']);
   let role = '';
@@ -1236,6 +1255,7 @@ async function handleAction(request, env) {
 
   switch (action) {
     case 'teacherDashboard': return teacherDashboard(env, session);
+    case 'getStorageStatus': return fileStorageStatus(env);
     case 'createClass': return createClass(env, session, payload);
     case 'reorderClasses': return reorderClasses(env, session, payload);
     case 'deleteClass': return deleteClass(env, session, payload);

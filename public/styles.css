@@ -755,6 +755,58 @@ video {
   overflow: hidden;
 }
 
+.storage-status {
+  margin: 0 0 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.86);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.68);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(16px);
+}
+
+.storage-status.notice { background: rgba(235, 246, 252, 0.84); }
+.storage-status.warning { background: rgba(255, 234, 226, 0.86); }
+.storage-status.critical { border-color: rgba(196, 64, 91, 0.34); background: rgba(255, 224, 232, 0.9); }
+
+.storage-status-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.storage-status-head strong,
+.storage-status-head span { display: block; }
+.storage-status-head span { margin-top: 4px; color: var(--muted); font-size: 0.88rem; }
+.storage-status-head b { white-space: nowrap; font-size: 0.94rem; }
+
+.storage-progress {
+  height: 9px;
+  margin: 14px 0 8px;
+  border-radius: 999px;
+  background: rgba(94, 102, 117, 0.12);
+  overflow: hidden;
+}
+
+.storage-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #a9d9d0, #8fc6d8);
+  transition: width 220ms ease;
+}
+
+.storage-status.notice .storage-progress span { background: linear-gradient(90deg, #9fd6df, #c7bce8); }
+.storage-status.warning .storage-progress span,
+.storage-status.critical .storage-progress span { background: linear-gradient(90deg, #e7949f, #c4405b); }
+.storage-status small { color: var(--muted); }
+
+@media (max-width: 620px) {
+  .storage-status-head { display: block; }
+  .storage-status-head b { display: block; margin-top: 10px; }
+}
+
 .summary-cell {
   position: relative;
   min-height: 105px;

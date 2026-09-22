@@ -10,6 +10,7 @@
   var activeContainer = null;
   var activeTab = 'announcements';
   var heartbeatBusy = false;
+  var studentRefreshBusy = false;
 
   function sessionOrLogin() {
     var session = window.LearnSession.get('student');
@@ -45,7 +46,7 @@
     return;
   }
 
-  loading(container);
+  if (!studentData) loading(container);
 
   try {
     studentData = await API.request('getStudentClass', {}, 'student');
@@ -66,6 +67,27 @@
       .addEventListener('click', function () {
         renderClass(container, safeTab, true);
       });
+  }
+
+  async function refreshClassSilently() {
+    if (studentRefreshBusy || !activeContainer || !activeContainer.isConnected) return;
+    studentRefreshBusy = true;
+    var session = sessionOrLogin();
+    if (!session) {
+      studentRefreshBusy = false;
+      return;
+    }
+    var scrollX = window.scrollX;
+    var scrollY = window.scrollY;
+    try {
+      studentData = await API.request('getStudentClass', {}, 'student', 1);
+      paintClass(activeContainer, activeTab, session);
+      window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
+    } catch (error) {
+      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
+    } finally {
+      studentRefreshBusy = false;
+    }
   }
   }
 
@@ -632,7 +654,7 @@
       heartbeatBusy = true;
       API.request('heartbeat', { classId: classId }, 'student', 1).then(function (response) {
         if (studentData && response && Number(response.version) !== Number(studentData.classInfo.version)) {
-          renderClass(activeContainer, activeTab, true);
+          return refreshClassSilently();
         }
       }).catch(function () {}).finally(function () { heartbeatBusy = false; });
     }

@@ -8,6 +8,9 @@
   var classDataId = '';
   var presenceTimer = null;
   var presenceBusy = false;
+  var classRefreshBusy = false;
+  var storageLastCheckedAt = 0;
+  var storageAlertStorageKey = 'learn_storage_alert_v1';
   var activeClassContainer = null;
   var activeClassTab = 'announcements';
   var classSortStorageKey = 'learn_teacher_class_sort_v1';
@@ -53,6 +56,7 @@
     stopPresence();
     if (dashboardData && !forceRefresh) {
       paintDashboard(container, dashboardData);
+      refreshDashboardStorage(container);
       return;
     }
     loading(container, '클래스 목록을 불러오고 있어요.');
@@ -68,6 +72,7 @@
 
   function paintDashboard(container, data) {
     var sortMode = classSortMode();
+    notifyStorageStatus(data.storage);
     container.innerHTML =
         '<section class="app-page">' +
           '<div class="dashboard-head">' +
@@ -79,6 +84,7 @@
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
             '</div>' +
           '</div>' +
+          storageStatusHtml(data.storage) +
           '<div class="summary-strip" aria-label="전체 현황">' +
             summaryCell('클래스', data.totals.classes) +
             summaryCell('등록 학생', data.totals.students) +
@@ -135,6 +141,59 @@
   function summaryCell(label, number) {
     return '<div class="summary-cell"><span>' + UI.escape(label) + '</span><strong>' +
       UI.escape(number || 0) + '</strong></div>';
+  }
+
+  function storageStatusHtml(storage) {
+    if (!storage) return '';
+    var percent = Math.max(0, Number(storage.percent || 0));
+    var level = storage.level || 'normal';
+    var message = level === 'critical'
+      ? '저장공간이 거의 찼어요. 오래된 파일을 지금 Drive로 보관해 주세요.'
+      : level === 'warning'
+        ? '저장공간이 많이 사용됐어요. 오래된 과제나 보드 파일을 Drive로 옮기는 것을 권장해요.'
+        : level === 'notice'
+          ? '저장공간이 70%를 넘었어요. 여유 있을 때 오래된 파일을 정리해 주세요.'
+          : '첨부파일 저장공간이 충분해요.';
+    return '<section class="storage-status ' + UI.attr(level) + '" aria-label="첨부파일 저장공간">' +
+      '<div class="storage-status-head"><div><strong>첨부파일 저장공간</strong><span>' + UI.escape(message) + '</span></div>' +
+        '<b>' + UI.escape(UI.size(storage.usedBytes || 0)) + ' / 10 GB</b></div>' +
+      '<div class="storage-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+        UI.attr(Math.min(100, percent)) + '"><span style="width:' + Math.min(100, percent) + '%"></span></div>' +
+      '<small>파일 ' + UI.escape(storage.fileCount || 0) + '개 · 관리 기준의 ' + UI.escape(percent) + '% 사용</small>' +
+    '</section>';
+  }
+
+  function notifyStorageStatus(storage) {
+    if (!storage || Number(storage.percent || 0) < 70) return;
+    var previous = null;
+    try { previous = JSON.parse(localStorage.getItem(storageAlertStorageKey) || 'null'); } catch (error) {}
+    var level = storage.level || 'notice';
+    var levels = { notice: 1, warning: 2, critical: 3 };
+    var recentlyShown = previous && Date.now() - Number(previous.shownAt || 0) < 24 * 60 * 60 * 1000;
+    if (recentlyShown && Number(levels[previous.level] || 0) >= Number(levels[level] || 0)) return;
+    var message = level === 'critical'
+      ? '첨부파일 저장공간이 95%를 넘었어요. Drive 보관이 필요합니다.'
+      : level === 'warning'
+        ? '첨부파일 저장공간이 85%를 넘었어요.'
+        : '첨부파일 저장공간이 70%를 넘었어요.';
+    UI.toast(message, level === 'notice' ? '' : 'error');
+    try { localStorage.setItem(storageAlertStorageKey, JSON.stringify({ level: level, shownAt: Date.now() })); } catch (error) {}
+  }
+
+  function checkStorageStatus() {
+    if (Date.now() - storageLastCheckedAt < 10 * 60 * 1000) return;
+    storageLastCheckedAt = Date.now();
+    API.request('getStorageStatus', {}, 'teacher', 1).then(notifyStorageStatus).catch(function () {});
+  }
+
+  function refreshDashboardStorage(container) {
+    API.request('getStorageStatus', {}, 'teacher', 1).then(function (storage) {
+      if (!dashboardData || !container || !container.isConnected) return;
+      dashboardData.storage = storage;
+      var current = container.querySelector('.storage-status');
+      if (current) current.outerHTML = storageStatusHtml(storage);
+      notifyStorageStatus(storage);
+    }).catch(function () {});
   }
 
   function classSortToolbar(active) {
@@ -299,8 +358,9 @@
       startPresence(classId);
       return;
     }
+    var refreshingCurrentClass = classData && classDataId === String(classId);
     if (forceRefresh) dashboardData = null;
-    loading(container, '클래스 자료를 불러오고 있어요.');
+    if (!refreshingCurrentClass) loading(container, '클래스 자료를 불러오고 있어요.');
     try {
       classData = await API.request('getTeacherClass', { classId: classId }, 'teacher');
       classDataId = String(classId);
@@ -308,6 +368,24 @@
       startPresence(classId);
     } catch (error) {
       errorScreen(container, error, function () { renderClass(container, classId, safeTab, true); });
+    }
+  }
+
+  async function refreshClassSilently(classId) {
+    if (classRefreshBusy || !activeClassContainer || !activeClassContainer.isConnected) return;
+    classRefreshBusy = true;
+    var scrollX = window.scrollX;
+    var scrollY = window.scrollY;
+    try {
+      var latest = await API.request('getTeacherClass', { classId: classId }, 'teacher', 1);
+      classData = latest;
+      classDataId = String(classId);
+      paintClass(activeClassContainer, classId, activeClassTab);
+      window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
+    } catch (error) {
+      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
+    } finally {
+      classRefreshBusy = false;
     }
   }
 
@@ -1295,14 +1373,14 @@
       presenceBusy = true;
       API.request('heartbeat', { classId: classId }, 'teacher', 1).then(function (response) {
         if (classData && response && Number(response.version) !== Number(classData.classInfo.version)) {
-          renderClass(activeClassContainer, classId, activeClassTab, true);
-          return;
+          return refreshClassSilently(classId);
         }
         var list = document.querySelector('[data-presence-list]');
         var count = document.querySelector('[data-online-count]');
         if (list && response.onlineStudents) list.innerHTML = presenceRows(response.onlineStudents);
         if (count && response.onlineStudents) count.textContent = response.onlineStudents.length + '명';
       }).catch(function () {}).finally(function () { presenceBusy = false; });
+      checkStorageStatus();
     }
     heartbeat();
     presenceTimer = window.setInterval(heartbeat, 15000);
