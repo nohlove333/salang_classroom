@@ -196,7 +196,7 @@ video {
   transform: scaleX(1);
 }
 
-.mobile-menu {
+.icon-button.mobile-menu {
   display: none;
 }
 
@@ -2149,7 +2149,7 @@ video {
   }
   .top-nav.open { display: grid; }
   .top-nav a { padding: 13px; }
-  .mobile-menu { display: block; }
+  .icon-button.mobile-menu { display: grid; }
   .page,
   .app-page { width: min(100% - 24px, 100%); padding-top: 22px; }
   .landing-page { grid-template-columns: 1fr; min-height: auto; padding-top: 46px; }
