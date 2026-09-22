@@ -68,11 +68,52 @@
     });
   }
 
+  function imageFromFile(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var image = new Image();
+      image.onload = function () {
+        URL.revokeObjectURL(url);
+        resolve(image);
+      };
+      image.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error('IMAGE_DECODE_FAILED'));
+      };
+      image.src = url;
+    });
+  }
+
+  async function optimizeImageForUpload(file) {
+    var type = String(file.type || '').toLowerCase();
+    var supported = type === 'image/jpeg' || type === 'image/webp';
+    if (!supported || file.size < 1200 * 1024) return file;
+    try {
+      var image = await imageFromFile(file);
+      var maxEdge = 2000;
+      var scale = Math.min(1, maxEdge / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+      var width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+      var height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      var context = canvas.getContext('2d', { alpha: false });
+      if (!context) return file;
+      context.drawImage(image, 0, 0, width, height);
+      var blob = await new Promise(function (resolve) {
+        canvas.toBlob(resolve, type, 0.84);
+      });
+      if (!blob || blob.size >= file.size * 0.92) return file;
+      return new File([blob], file.name, { type: type, lastModified: file.lastModified });
+    } catch (error) {
+      return file;
+    }
+  }
+
   async function filesToPayload(files) {
     var list = Array.from(files || []);
     var maxEach = Number(config.maxFileSizeMb || 25) * 1024 * 1024;
     var maxTotal = Number(config.maxUploadSizeMb || 35) * 1024 * 1024;
-    var total = list.reduce(function (sum, file) { return sum + file.size; }, 0);
     var oversized = list.find(function (file) { return file.size > maxEach; });
     if (oversized) {
       throw new ApiError(
@@ -80,13 +121,18 @@
         'FILE_TOO_LARGE'
       );
     }
+    var prepared = [];
+    for (var index = 0; index < list.length; index += 1) {
+      prepared.push(await optimizeImageForUpload(list[index]));
+    }
+    var total = prepared.reduce(function (sum, file) { return sum + file.size; }, 0);
     if (total > maxTotal) {
       throw new ApiError(
         '한 번에 올리는 파일의 합계는 ' + (config.maxUploadSizeMb || 35) + 'MB 이하여야 합니다.',
         'UPLOAD_TOO_LARGE'
       );
     }
-    return Promise.all(list.map(fileToPayload));
+    return Promise.all(prepared.map(fileToPayload));
   }
 
   function saveBase64File(file) {

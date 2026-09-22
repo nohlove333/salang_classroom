@@ -6,6 +6,9 @@
   var objectUrls = [];
   var thumbnailCache = {};
   var thumbnailMaxBytes = 3 * 1024 * 1024;
+  var thumbnailQueue = [];
+  var thumbnailRequestsActive = 0;
+  var thumbnailRequestLimit = 2;
 
   function escapeHtml(value) {
     return String(value == null ? '' : value)
@@ -328,6 +331,9 @@
 
   async function resolveFileUrl(file, role, allowExternalAccess) {
     if (file.publicUrl) return file.publicUrl;
+    if (fileKind(file) === 'image' && Number(file.size || 0) <= thumbnailMaxBytes) {
+      return thumbnailUrl(file, role);
+    }
     try {
       var response = await window.LearnAPI.request('getFileContent', { fileId: file.id }, role);
       return blobUrlFromBase64(response);
@@ -557,10 +563,36 @@
   function thumbnailUrl(file, role) {
     var cacheKey = String(role || '') + ':' + String(file.id || '');
     if (thumbnailCache[cacheKey]) return thumbnailCache[cacheKey];
-    thumbnailCache[cacheKey] = window.LearnAPI.request('getFileContent', { fileId: file.id }, role).then(function (response) {
+    thumbnailCache[cacheKey] = queueThumbnailRequest(function () {
+      return window.LearnAPI.request('getFileContent', { fileId: file.id }, role);
+    }).then(function (response) {
       return 'data:' + String(response.mimeType || file.mimeType || 'image/jpeg') + ';base64,' + response.data;
+    }).catch(function (error) {
+      delete thumbnailCache[cacheKey];
+      throw error;
     });
     return thumbnailCache[cacheKey];
+  }
+
+  function queueThumbnailRequest(task) {
+    return new Promise(function (resolve, reject) {
+      thumbnailQueue.push({ task: task, resolve: resolve, reject: reject });
+      runThumbnailQueue();
+    });
+  }
+
+  function runThumbnailQueue() {
+    while (thumbnailRequestsActive < thumbnailRequestLimit && thumbnailQueue.length) {
+      startThumbnailRequest(thumbnailQueue.shift());
+    }
+  }
+
+  function startThumbnailRequest(item) {
+    thumbnailRequestsActive += 1;
+    Promise.resolve().then(item.task).then(item.resolve, item.reject).finally(function () {
+      thumbnailRequestsActive -= 1;
+      runThumbnailQueue();
+    });
   }
 
   function loadAttachmentThumbnail(button, fallbackRole) {
