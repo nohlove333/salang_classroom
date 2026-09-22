@@ -217,8 +217,8 @@
     }
     app.innerHTML =
       '<section class="auth-page">' +
-        '<div class="auth-intro"><p class="eyebrow">For student</p>' +
-          '<h1>우리 반 수업 공간으로 들어가요.</h1>' +
+        '<div class="auth-intro student-auth-intro"><p class="eyebrow">For student</p>' +
+          '<h1>우리 반 수업<br>공간으로 들어가요.</h1>'
           '<p>선생님께 받은 클래스 코드, 출석번호, 4자리 비밀번호를 입력하세요.</p></div>' +
         '<div class="auth-card"><h2>학생 로그인</h2><p>내 정보는 우리 반 수업 공간에서만 사용돼요.</p>' +
           '<form class="form-stack" data-student-login>' +
@@ -291,3 +291,39 @@
   if (!location.hash) location.hash = resumeRoute();
   else render();
 })();
+/* 학생 로그인 왼쪽 안내 영역 */
+.student-auth-intro {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px 10px 24px 28px;
+}
+
+.student-auth-intro .eyebrow {
+  margin-bottom: 18px;
+}
+
+.student-auth-intro h1 {
+  max-width: 470px;
+  font-family: var(--font-title);
+  font-size: clamp(2.5rem, 3.2vw, 3.2rem);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.045em;
+}
+
+.student-auth-intro > p:last-child {
+  max-width: 390px;
+  margin-top: 24px;
+  font-size: 1rem;
+  line-height: 1.8;
+}
+@media (max-width: 840px) {
+  .student-auth-intro {
+    padding: 20px 8px 4px;
+  }
+
+  .student-auth-intro h1 {
+    font-size: clamp(2.3rem, 10vw, 3.1rem);
+  }
+}
