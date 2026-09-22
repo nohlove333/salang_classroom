@@ -88,7 +88,7 @@
         '</nav>' +
         '<section class="panel content-panel">' + renderTab(tab, session) + '</section>' +
       '</section>';
-    container.querySelector('[data-refresh]').addEventListener('click', function () { renderClass(container, tab); });
+    container.querySelector('[data-refresh]').addEventListener('click', function () {renderClass(container, tab, true); });
     container.querySelector('[data-student-logout]').addEventListener('click', function () {
       window.LearnSession.clear('student');
       if (window.LearnNavigation) window.LearnNavigation.clear('student');
