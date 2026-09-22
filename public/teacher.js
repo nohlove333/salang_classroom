@@ -7,6 +7,7 @@
   var classData = null;
   var classDataId = '';
   var presenceTimer = null;
+  var presenceVisibilityHandler = null;
   var presenceBusy = false;
   var classRefreshBusy = false;
   var storageLastCheckedAt = 0;
@@ -1383,12 +1384,19 @@
       checkStorageStatus();
     }
     heartbeat();
-    presenceTimer = window.setInterval(heartbeat, 15000);
+    var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
+    presenceTimer = window.setInterval(heartbeat, syncMilliseconds);
+    presenceVisibilityHandler = function () {
+      if (document.visibilityState === 'visible') heartbeat();
+    };
+    document.addEventListener('visibilitychange', presenceVisibilityHandler);
   }
 
   function stopPresence() {
     if (presenceTimer) window.clearInterval(presenceTimer);
+    if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
     presenceTimer = null;
+    presenceVisibilityHandler = null;
     presenceBusy = false;
   }
 

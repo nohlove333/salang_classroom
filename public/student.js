@@ -6,6 +6,7 @@
   var studentData = null;
   var selectedBoards = {};
   var heartbeatTimer = null;
+  var heartbeatVisibilityHandler = null;
   var studentPostFilters = { type: 'all', category: 'all' };
   var activeContainer = null;
   var activeTab = 'announcements';
@@ -659,12 +660,19 @@
       }).catch(function () {}).finally(function () { heartbeatBusy = false; });
     }
     beat();
-    heartbeatTimer = window.setInterval(beat, 15000);
+    var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
+    heartbeatTimer = window.setInterval(beat, syncMilliseconds);
+    heartbeatVisibilityHandler = function () {
+      if (document.visibilityState === 'visible') beat();
+    };
+    document.addEventListener('visibilitychange', heartbeatVisibilityHandler);
   }
 
   function stopHeartbeat() {
     if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+    if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
     heartbeatTimer = null;
+    heartbeatVisibilityHandler = null;
     heartbeatBusy = false;
   }
 
