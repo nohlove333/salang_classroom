@@ -287,6 +287,16 @@
     clear: clearRole,
     resume: resumeRoute
   };
+  window.addEventListener('learn:session-expired', function (event) {
+    var role = event.detail && event.detail.role;
+    if (role !== 'student' && role !== 'teacher') return;
+    clearRole(role);
+    UI.closeModal();
+    var target = role === 'student' ? '#/student/login' : '#/teacher/login';
+    if (location.hash === target) render();
+    else location.hash = target;
+    UI.toast('로그인이 만료되어 다시 로그인해야 해요.', 'error');
+  });
   window.addEventListener('hashchange', render);
   if (!location.hash) location.hash = resumeRoute();
   else render();

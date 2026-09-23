@@ -54,6 +54,13 @@
     paintClass(container, safeTab, session);
     startHeartbeat(studentData.classInfo.id);
   } catch (error) {
+    if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') {
+      window.LearnSession.clear('student');
+      if (window.LearnNavigation) window.LearnNavigation.clear('student');
+      if (location.hash === '#/student/login') window.dispatchEvent(new Event('hashchange'));
+      else location.hash = '#/student/login';
+      return;
+    }
     container.innerHTML =
       '<section class="page"><div class="panel">' +
       UI.empty(
@@ -85,7 +92,12 @@
       paintClass(activeContainer, activeTab, session);
       window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
     } catch (error) {
-      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
+      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') {
+        window.LearnSession.clear('student');
+        if (window.LearnNavigation) window.LearnNavigation.clear('student');
+        location.hash = '#/student/login';
+        return;
+      }
     } finally {
       studentRefreshBusy = false;
     }

@@ -49,6 +49,14 @@
     localStorage.setItem(key, JSON.stringify(value));
   }
 
+  function expireSession(role, code) {
+    if (!role || (code !== 'SESSION_EXPIRED' && code !== 'UNAUTHORIZED')) return;
+    writeSession(role, null);
+    window.dispatchEvent(new CustomEvent('learn:session-expired', {
+      detail: { role: role, code: code }
+    }));
+  }
+
   function fileToPayload(file) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -236,6 +244,7 @@
         result = null;
       }
       if (!response.ok) {
+        expireSession(role, result && result.code ? result.code : '');
         throw new ApiError(
           result && result.message ? result.message : '서버 응답이 원활하지 않습니다.',
           result && result.code ? result.code : 'HTTP_' + response.status,
@@ -243,9 +252,7 @@
         );
       }
       if (!result || !result.ok) {
-        if (result.code === 'SESSION_EXPIRED' || result.code === 'UNAUTHORIZED') {
-          if (role) writeSession(role, null);
-        }
+        expireSession(role, result && result.code ? result.code : '');
         throw new ApiError(
           result && result.message ? result.message : '서버 응답을 확인하지 못했습니다.',
           result && result.code ? result.code : 'INVALID_RESPONSE',

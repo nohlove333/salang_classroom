@@ -1,4 +1,4 @@
-const RELEASE = '2026-09-22-v32';
+const RELEASE = '2026-09-23-v33';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 
 const SCHEMA = `
