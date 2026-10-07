@@ -844,7 +844,10 @@
       button.addEventListener('click', function () { reissueClassPins(classId, container, tab); });
     });
     container.querySelectorAll('[data-reset-pin]').forEach(function (button) {
-      button.addEventListener('click', function () { resetPin(button.dataset.resetPin, button.dataset.studentLabel); });
+      button.addEventListener('click', function () {
+        var student = classData.students.find(function (item) { return item.id === button.dataset.resetPin; });
+        if (student) resetPin(student);
+      });
     });
     container.querySelectorAll('[data-delete-student]').forEach(function (button) {
       button.addEventListener('click', function () {
@@ -1000,7 +1003,7 @@
       title: '학생 비밀번호 발급 완료',
       wide: true,
       html:
-        '<div class="info-box">비밀번호 원문은 지금만 확인할 수 있어요. 학생에게 전달하기 전에 발급표를 저장해 주세요.</div>' +
+        '<div class="info-box">비밀번호 원문은 지금만 확인할 수 있어요. 학생에게 전달하기 전에 발급표를 저장해 주세요. 인쇄용 로그인표에는 학생 접속 QR이 함께 들어갑니다.</div>' +
         '<div class="table-wrap" style="margin-top:16px"><table class="data-table"><thead><tr><th>출석번호</th><th>이름</th><th>4자리 비밀번호</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
         '<div class="modal-actions"><button class="button secondary" type="button" data-print-pins>로그인표 인쇄</button>' +
           '<button class="button secondary" type="button" data-download-pins>발급표 CSV 저장</button>' +
@@ -1086,15 +1089,17 @@
     }
     var classInfo = classData.classInfo;
     var accessUrl = studentAccessUrl();
+    var qrUrl = new URL('./student-login-qr.svg?v=37', window.location.href).toString();
     var slips = students.map(function (student) {
       return '<section class="slip"><div class="slip-brand">사랑스런(Learn) 수업시간</div>' +
         '<h2>' + UI.escape(classInfo.name) + '</h2>' +
         '<p class="school">' + UI.escape(classInfo.school || '우리 학교') + '</p>' +
-        '<dl><div><dt>클래스 코드</dt><dd>' + UI.escape(classCode) + '</dd></div>' +
+        '<div class="slip-layout"><div class="slip-info"><dl><div><dt>클래스 코드</dt><dd>' + UI.escape(classCode) + '</dd></div>' +
           '<div><dt>출석번호</dt><dd>' + UI.escape(student.number) + '번</dd></div>' +
           '<div><dt>이름</dt><dd>' + UI.escape(student.name) + '</dd></div>' +
           '<div><dt>비밀번호</dt><dd class="pin">' + UI.escape(student.pin) + '</dd></div></dl>' +
-        '<small>학생 접속: ' + UI.escape(accessUrl) + '</small></section>';
+          '<small>QR을 찍은 뒤 위 정보를 직접 입력하세요.<br>학생 접속: ' + UI.escape(accessUrl) + '</small></div>' +
+          '<div class="qr-wrap"><img src="' + UI.attr(qrUrl) + '" alt="학생 로그인 QR"><span>학생 로그인</span></div></div></section>';
     }).join('');
     printWindow.document.open();
     printWindow.document.write('<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
@@ -1103,9 +1108,11 @@
       '.print-toolbar{position:sticky;top:0;z-index:2;display:flex;justify-content:center;gap:10px;padding:14px;background:#fff;border-bottom:1px solid #ddd}' +
       '.print-toolbar button{border:0;border-radius:999px;padding:11px 22px;background:#18171b;color:#fff;font-family:inherit;font-size:16px;font-weight:700;cursor:pointer}' +
       '.sheet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5mm;padding:10mm}' +
-      '.slip{min-height:52mm;border:1.5px dashed #7b6f75;border-radius:12px;padding:7mm;break-inside:avoid;background:linear-gradient(135deg,#fff 70%,#fff2f6)}' +
+      '.slip{min-height:52mm;border:1.5px dashed #7b6f75;border-radius:12px;padding:6mm;break-inside:avoid;background:linear-gradient(135deg,#fff 70%,#fff2f6)}' +
       '.slip-brand{font-size:12px;font-weight:800;color:#bd4964}.slip h2{margin:4px 0 0;font-size:21px}.school{margin:2px 0 10px;color:#666;font-size:13px}' +
+      '.slip-layout{display:grid;grid-template-columns:minmax(0,1fr) 76px;align-items:center;gap:10px}.slip-info{min-width:0}' +
       'dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:0}dl div{border-top:1px solid #ddd;padding-top:5px}dt{font-size:10px;color:#777}dd{margin:2px 0 0;font-size:15px;font-weight:750}.pin{font-size:20px;letter-spacing:.16em;color:#bd4964}' +
+      '.qr-wrap{display:flex;flex-direction:column;align-items:center;gap:3px}.qr-wrap img{display:block;width:76px;height:76px;background:#fff}.qr-wrap span{font-size:9px;font-weight:800;color:#555}' +
       '.slip small{display:block;margin-top:10px;color:#777;font-size:9px;line-height:1.35;overflow-wrap:anywhere}@media(max-width:620px){.sheet{grid-template-columns:1fr;padding:14px}.slip{min-height:auto}}' +
       '@media print{.print-toolbar{display:none}.sheet{padding:0;grid-template-columns:repeat(2,minmax(0,1fr));gap:5mm}.slip{min-height:52mm}}' +
       '</style></head><body><div class="print-toolbar"><button type="button" onclick="window.print()">인쇄 또는 PDF 저장</button></div>' +
@@ -1125,7 +1132,8 @@
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
   }
 
-  async function resetPin(studentId, studentLabel) {
+  async function resetPin(student) {
+    var studentLabel = student.number + '번 ' + student.name;
     var yes = await UI.confirm({
       title: '비밀번호 재발급',
       message: studentLabel + ' 학생의 기존 비밀번호는 즉시 사용할 수 없게 됩니다.',
@@ -1133,12 +1141,16 @@
     });
     if (!yes) return;
     try {
-      var response = await API.request('resetStudentPin', { studentId: studentId }, 'teacher');
+      var response = await API.request('resetStudentPin', { studentId: student.id }, 'teacher');
       var dialog = UI.modal({
         title: studentLabel + ' 새 비밀번호',
         html: '<div style="padding:20px;text-align:center"><span class="pin-code" style="font-size:2.4rem">' +
           UI.escape(response.pin) + '</span><p style="color:var(--muted)">학생에게 이 4자리 숫자를 전달해 주세요.</p></div>' +
-          '<div class="modal-actions"><button class="button" type="button" data-done>확인</button></div>'
+          '<div class="modal-actions"><button class="button secondary" type="button" data-print-one-pin>QR 로그인표 인쇄</button>' +
+          '<button class="button" type="button" data-done>확인</button></div>'
+      });
+      dialog.querySelector('[data-print-one-pin]').addEventListener('click', function () {
+        printLoginSlips([{ id: student.id, number: student.number, name: student.name, pin: response.pin }], classData.classInfo.code);
       });
       dialog.querySelector('[data-done]').addEventListener('click', UI.closeModal);
     } catch (error) {
@@ -1577,7 +1589,12 @@
   }
 
   function startPresence(classId) {
-    stopPresence();
+    /* 화면의 1초 카운트다운은 유지하고 접속/변경 동기화 타이머만 교체합니다. */
+    if (presenceTimer) window.clearInterval(presenceTimer);
+    if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
+    presenceTimer = null;
+    presenceVisibilityHandler = null;
+    presenceBusy = false;
     function heartbeat() {
       if (presenceBusy) return;
       presenceBusy = true;

@@ -1,4 +1,6 @@
-const RELEASE = '2026-10-07-v35';
+import qrcode from 'qrcode-generator';
+
+const RELEASE = '2026-10-07-v37';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -1524,6 +1526,22 @@ async function handleSignedFile(request, env, fileId) {
   return new Response(object.body, { status, headers });
 }
 
+function studentLoginQr(request) {
+  const requestUrl = new URL(request.url);
+  const studentUrl = `${requestUrl.origin}/#/student/login`;
+  const code = qrcode(0, 'M');
+  code.addData(studentUrl, 'Byte');
+  code.make();
+  const svg = code.createSvgTag({ cellSize: 5, margin: 4, scalable: true });
+  return new Response(svg, {
+    headers: {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=86400',
+      'X-Content-Type-Options': 'nosniff'
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -1531,6 +1549,9 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
     try {
+      if (url.pathname === '/student-login-qr.svg' && request.method === 'GET') {
+        return studentLoginQr(request);
+      }
       if (url.pathname === '/api/health') {
         return ok({ status: 'ok', databaseReady: await schemaReady(env), provider: 'cloudflare', release: RELEASE }, request);
       }

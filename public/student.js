@@ -863,7 +863,12 @@
   }
 
   function startHeartbeat(classId) {
-    stopHeartbeat();
+    /* 화면의 1초 카운트다운은 유지하고 서버 동기화 타이머만 교체합니다. */
+    if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+    if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
+    heartbeatTimer = null;
+    heartbeatVisibilityHandler = null;
+    heartbeatBusy = false;
     function applyBoardReviews(reviews) {
       var changed = false;
       (reviews || []).forEach(function (review) {

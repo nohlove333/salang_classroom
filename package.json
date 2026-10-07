@@ -8,6 +8,9 @@
     "deploy": "wrangler deploy",
     "check": "node --check worker/index.js"
   },
+  "dependencies": {
+    "qrcode-generator": "1.4.4"
+  },
   "devDependencies": {
     "wrangler": "^4.45.0"
   }
