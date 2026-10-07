@@ -222,7 +222,7 @@
           '<p>선생님께 받은 클래스 코드, 출석번호, 4자리 비밀번호를 입력하세요.</p></div>' +
         '<div class="auth-card"><h2>학생 로그인</h2><p>내 정보는 우리 반 수업 공간에서만 사용돼요.</p>' +
           '<form class="form-stack" data-student-login>' +
-            '<div class="field"><label for="student-class-code">클래스 코드</label><input id="student-class-code" name="classCode" autocomplete="off" required maxlength="16" placeholder="예: LOVE01"></div>' +
+            '<div class="field"><label for="student-class-code">클래스 코드</label><input id="student-class-code" name="classCode" autocomplete="off" required maxlength="16" placeholder="예: 사랑1반"></div>' +
             '<div class="form-row">' +
               '<div class="field"><label for="student-number">출석번호</label><input id="student-number" name="number" type="number" inputmode="numeric" min="1" max="999" required placeholder="예: 7"></div>' +
               '<div class="field"><label for="student-pin">비밀번호</label><input id="student-pin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password" required placeholder="4자리"></div>' +
@@ -240,7 +240,7 @@
       UI.busy(button, true, '입장 확인 중…');
       try {
         var result = await API.request('studentLogin', {
-          classCode: String(values.get('classCode') || '').trim().toUpperCase(),
+          classCode: String(values.get('classCode') || '').trim().normalize('NFC').toUpperCase(),
           number: Number(values.get('number')),
           pin: String(values.get('pin') || '')
         });

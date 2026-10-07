@@ -300,8 +300,8 @@
             '<div class="field"><label for="class-subject">과목</label><input id="class-subject" name="subject" placeholder="예: 도덕" maxlength="30"></div>' +
           '</div>' +
           '<div class="field"><label for="class-school">학교명</label><input id="class-school" name="school" placeholder="예: 사랑중학교" maxlength="50"></div>' +
-          '<div class="field"><label for="class-code">클래스 코드</label><input id="class-code" name="code" placeholder="예: LOVE101" required minlength="4" maxlength="16" pattern="[A-Za-z0-9_-]+">' +
-            '<span class="field-help">영문, 숫자, 밑줄(_), 하이픈(-)만 사용할 수 있어요. 학생 로그인과 클래스 삭제에 사용됩니다.</span></div>' +
+          '<div class="field"><label for="class-code">클래스 코드</label><input id="class-code" name="code" placeholder="예: 사랑1반" required minlength="3" maxlength="16" pattern="(?:[A-Za-z0-9_]|[ㄱ-ㅎ]|[ㅏ-ㅣ]|[가-힣]|-)+">' +
+            '<span class="field-help">한글, 영문, 숫자, 밑줄(_), 하이픈(-)을 3~16자로 사용할 수 있어요. 학생 로그인과 클래스 삭제에 사용됩니다.</span></div>' +
           '<div class="modal-actions"><button class="button secondary" type="button" data-close-modal>취소</button>' +
             '<button class="button" type="submit">클래스 만들기</button></div>' +
         '</form>'
@@ -318,7 +318,7 @@
           name: String(formData.get('name') || '').trim(),
           subject: String(formData.get('subject') || '').trim(),
           school: String(formData.get('school') || '').trim(),
-          code: String(formData.get('code') || '').trim().toUpperCase()
+          code: String(formData.get('code') || '').trim().normalize('NFC').toUpperCase()
         }, 'teacher');
         UI.closeModal();
         UI.toast('클래스를 만들었습니다.');
@@ -340,7 +340,7 @@
     });
     if (typed == null) return;
     try {
-      await API.request('deleteClass', { classId: classId, confirmCode: String(typed).trim().toUpperCase() }, 'teacher');
+      await API.request('deleteClass', { classId: classId, confirmCode: String(typed).trim().normalize('NFC').toUpperCase() }, 'teacher');
       UI.toast('클래스를 삭제했습니다.');
       renderDashboard(container, true);
     } catch (error) {

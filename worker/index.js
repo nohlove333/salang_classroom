@@ -1,4 +1,4 @@
-const RELEASE = '2026-09-23-v33';
+const RELEASE = '2026-10-07-v34';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 
 const SCHEMA = `
@@ -147,6 +147,10 @@ const encoder = new TextEncoder();
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeClassCode(value) {
+  return String(value || '').trim().normalize('NFC').toUpperCase();
 }
 
 function uid(prefix = 'id') {
@@ -584,7 +588,7 @@ async function teacherLogin(env, payload) {
 
 async function studentLogin(env, payload) {
   if (!(await schemaReady(env))) throw new AppError('아직 개설된 클래스가 없습니다.', 'SETUP_REQUIRED', 404);
-  const code = String(payload.classCode || '').trim().toUpperCase();
+  const code = normalizeClassCode(payload.classCode);
   const number = Number(payload.number);
   const classRow = await env.DB.prepare('SELECT * FROM classes WHERE code=?').bind(code).first();
   if (!classRow) throw new AppError('클래스 코드를 확인해 주세요.', 'CLASS_NOT_FOUND', 404);
@@ -642,9 +646,9 @@ async function fileStorageStatus(env) {
 
 async function createClass(env, session, payload) {
   const name = String(payload.name || '').trim();
-  const code = String(payload.code || '').trim().toUpperCase();
-  if (!name || !/^[A-Z0-9_-]{3,16}$/.test(code)) {
-    throw new AppError('클래스 이름과 3~16자의 영문·숫자 코드를 입력해 주세요.', 'INVALID_CLASS');
+  const code = normalizeClassCode(payload.code);
+  if (!name || !/^[A-Z0-9ㄱ-ㅎㅏ-ㅣ가-힣_-]{3,16}$/.test(code)) {
+    throw new AppError('클래스 이름과 3~16자의 한글·영문·숫자 코드를 입력해 주세요.', 'INVALID_CLASS');
   }
   const duplicate = await env.DB.prepare('SELECT id FROM classes WHERE code=?').bind(code).first();
   if (duplicate) throw new AppError('이미 사용 중인 클래스 코드입니다.', 'DUPLICATE_CLASS_CODE', 409);
@@ -675,7 +679,7 @@ async function reorderClasses(env, session, payload) {
 
 async function deleteClass(env, session, payload) {
   const row = await ownedClass(env, session, payload.classId);
-  if (row.code !== String(payload.confirmCode || '').trim().toUpperCase()) {
+  if (normalizeClassCode(row.code) !== normalizeClassCode(payload.confirmCode)) {
     throw new AppError('클래스 코드가 일치하지 않습니다.', 'CLASS_CODE_MISMATCH');
   }
   const [contents, submissions, posts] = await Promise.all([

@@ -648,15 +648,19 @@
       }
 
       if (action === 'createClass') {
+        var normalizedClassCode = String(payload.code || '').trim().normalize('NFC').toUpperCase();
+        if (!payload.name || !/^[A-Z0-9ㄱ-ㅎㅏ-ㅣ가-힣_-]{3,16}$/.test(normalizedClassCode)) {
+          throw new ApiError('클래스 이름과 3~16자의 한글·영문·숫자 코드를 입력해 주세요.', 'INVALID_CLASS');
+        }
         if (state.classes.some(function (item) {
-          return item.code.toLowerCase() === String(payload.code).toLowerCase();
+          return String(item.code).normalize('NFC').toLowerCase() === normalizedClassCode.toLowerCase();
         })) throw new ApiError('이미 사용 중인 클래스 코드입니다.', 'DUPLICATE_CLASS_CODE');
         var newClass = {
           id: uid('class'),
           name: payload.name,
           subject: payload.subject || '',
           school: payload.school || '',
-          code: String(payload.code || '').toUpperCase(),
+          code: normalizedClassCode,
           studentCount: 0,
           displayOrder: state.classes.reduce(function (max, item) {
             return Math.max(max, Number(item.displayOrder || 0));
@@ -686,7 +690,7 @@
 
       if (action === 'deleteClass') {
         var targetClass = state.classes.find(function (item) { return item.id === payload.classId; });
-        if (!targetClass || targetClass.code !== String(payload.confirmCode || '').toUpperCase()) {
+        if (!targetClass || String(targetClass.code).normalize('NFC').toUpperCase() !== String(payload.confirmCode || '').trim().normalize('NFC').toUpperCase()) {
           throw new ApiError('클래스 코드가 일치하지 않습니다.', 'CLASS_CODE_MISMATCH');
         }
         var classFileIds = [];
