@@ -1,5 +1,6 @@
-const RELEASE = '2026-10-07-v34';
+const RELEASE = '2026-10-07-v35';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
+let featureSchemaVerified = false;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -96,6 +97,31 @@ CREATE TABLE IF NOT EXISTS board_posts (
   FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS posts_class_board ON board_posts(class_id, board_id);
+CREATE TABLE IF NOT EXISTS idea_posts (
+  id TEXT PRIMARY KEY,
+  idea_id TEXT NOT NULL,
+  class_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  student_number INTEGER NOT NULL,
+  student_name TEXT NOT NULL,
+  group_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (idea_id) REFERENCES contents(id) ON DELETE CASCADE,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idea_posts_class_idea ON idea_posts(class_id, idea_id, created_at);
+CREATE INDEX IF NOT EXISTS idea_posts_student ON idea_posts(student_id, updated_at);
+CREATE TABLE IF NOT EXISTS class_timers (
+  class_id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '활동 시간',
+  started_at TEXT NOT NULL,
+  ends_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,
   r2_key TEXT NOT NULL UNIQUE,
@@ -266,12 +292,21 @@ async function ensureSchema(env) {
       );
     }
   }
+  featureSchemaVerified = true;
 }
 
 async function schemaReady(env) {
   try {
     const row = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='teachers'").first();
-    return Boolean(row);
+    if (!row) return false;
+    if (!featureSchemaVerified) {
+      const featureTables = await all(env.DB.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers')"
+      ));
+      if (featureTables.length < 2) await ensureSchema(env);
+      featureSchemaVerified = true;
+    }
+    return true;
   } catch (_) {
     return false;
   }
@@ -385,6 +420,37 @@ function postJson(row) {
   };
 }
 
+function timerJson(row) {
+  if (!row) return null;
+  return {
+    classId: row.class_id,
+    title: row.title || '활동 시간',
+    startedAt: row.started_at,
+    endsAt: row.ends_at,
+    ended: row.ends_at <= nowIso(),
+    updatedAt: row.updated_at
+  };
+}
+
+function ideaPostJson(row, revealAuthor = false, viewerId = '') {
+  const item = {
+    id: row.id,
+    ideaId: row.idea_id,
+    classId: row.class_id,
+    text: row.text || '',
+    groupName: row.group_name || '',
+    mine: Boolean(viewerId && row.student_id === viewerId),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+  if (revealAuthor) {
+    item.studentId = row.student_id;
+    item.studentNumber = Number(row.student_number);
+    item.studentName = row.student_name;
+  }
+  return item;
+}
+
 function fileJson(row) {
   return {
     id: row.id,
@@ -423,7 +489,7 @@ async function classData(env, classId, studentId = '') {
   const classRow = await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(classId).first();
   if (!classRow) throw new AppError('클래스를 찾을 수 없습니다.', 'NOT_FOUND', 404);
   const cutoff = new Date(Date.now() - 90000).toISOString();
-  const [studentRows, contentRows, submissionRows, postRows, attachmentMap] = await Promise.all([
+  const [studentRows, contentRows, submissionRows, postRows, ideaPostRows, timerRow, attachmentMap] = await Promise.all([
     all(env.DB.prepare(
       'SELECT *, CASE WHEN last_seen_at>=? THEN 1 ELSE 0 END AS online FROM students WHERE class_id=? ORDER BY number'
     ).bind(cutoff, classId)),
@@ -434,6 +500,8 @@ async function classData(env, classId, studentId = '') {
         : 'SELECT * FROM submissions WHERE class_id=? ORDER BY student_number, submitted_at DESC'
     ).bind(...(studentId ? [classId, studentId] : [classId]))),
     all(env.DB.prepare('SELECT * FROM board_posts WHERE class_id=? ORDER BY student_number').bind(classId)),
+    all(env.DB.prepare('SELECT * FROM idea_posts WHERE class_id=? ORDER BY created_at, id').bind(classId)),
+    env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first(),
     loadAttachmentMap(env, classId)
   ]);
   const students = studentRows.map(studentJson);
@@ -456,6 +524,7 @@ async function classData(env, classId, studentId = '') {
     }
     return item;
   });
+  const ideaPosts = ideaPostRows.map((row) => ideaPostJson(row, !studentId, studentId));
   const submissionCounts = new Map();
   if (!studentId) {
     for (const item of submissions) submissionCounts.set(item.assignmentId, (submissionCounts.get(item.assignmentId) || 0) + 1);
@@ -467,19 +536,26 @@ async function classData(env, classId, studentId = '') {
   }
   const postCounts = new Map();
   for (const item of posts) postCounts.set(item.boardId, (postCounts.get(item.boardId) || 0) + 1);
+  const ideaPostCounts = new Map();
+  for (const item of ideaPosts) ideaPostCounts.set(item.ideaId, (ideaPostCounts.get(item.ideaId) || 0) + 1);
   const announcements = contents.filter((item, index) => contentRows[index].type === 'announcement');
   const assignments = contents.filter((item, index) => contentRows[index].type === 'assignment')
     .map((item) => ({ ...item, submissionCount: submissionCounts.get(item.id) || 0 }));
   const boards = contents.filter((item, index) => contentRows[index].type === 'board')
     .map((item) => ({ ...item, postCount: postCounts.get(item.id) || 0 }));
+  const ideas = contents.filter((item, index) => contentRows[index].type === 'idea')
+    .map((item) => ({ ...item, responseCount: ideaPostCounts.get(item.id) || 0 }));
   return {
     classInfo: classJson(classRow),
     students,
     announcements,
     assignments,
     boards,
+    ideas,
     submissions,
     boardPosts: posts,
+    ideaPosts,
+    timer: timerJson(timerRow),
     onlineStudents: students.filter((item) => item.online)
   };
 }
@@ -692,6 +768,8 @@ async function deleteClass(env, session, payload) {
   await deleteOwnerFiles(env, 'board_post', posts.map((item) => item.id));
   await env.DB.batch([
     env.DB.prepare('DELETE FROM sessions WHERE class_id=?').bind(row.id),
+    env.DB.prepare('DELETE FROM class_timers WHERE class_id=?').bind(row.id),
+    env.DB.prepare('DELETE FROM idea_posts WHERE class_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM board_posts WHERE class_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM submissions WHERE class_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM contents WHERE class_id=?').bind(row.id),
@@ -703,7 +781,7 @@ async function deleteClass(env, session, payload) {
 
 async function upsertContent(env, session, payload) {
   const type = String(payload.type || '');
-  if (!['announcement', 'assignment', 'board'].includes(type)) throw new AppError('잘못된 자료 유형입니다.', 'INVALID_TYPE');
+  if (!['announcement', 'assignment', 'board', 'idea'].includes(type)) throw new AppError('잘못된 자료 유형입니다.', 'INVALID_TYPE');
   const classRow = await ownedClass(env, session, payload.classId);
   const data = payload.data || {};
   const title = String(data.title || '').trim();
@@ -747,6 +825,9 @@ async function deleteContent(env, session, payload) {
     const related = await all(env.DB.prepare('SELECT id FROM board_posts WHERE board_id=?').bind(row.id));
     await deleteOwnerFiles(env, 'board_post', related.map((item) => item.id));
     await env.DB.prepare('DELETE FROM board_posts WHERE board_id=?').bind(row.id).run();
+  }
+  if (type === 'idea') {
+    await env.DB.prepare('DELETE FROM idea_posts WHERE idea_id=?').bind(row.id).run();
   }
   await env.DB.prepare('DELETE FROM contents WHERE id=?').bind(row.id).run();
   await touchClass(env, row.class_id);
@@ -831,6 +912,7 @@ async function deleteStudent(env, session, payload) {
     env.DB.prepare("DELETE FROM sessions WHERE role='student' AND user_id=?").bind(row.id),
     env.DB.prepare('DELETE FROM submissions WHERE student_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM board_posts WHERE student_id=?').bind(row.id),
+    env.DB.prepare('DELETE FROM idea_posts WHERE student_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM students WHERE id=?').bind(row.id),
     env.DB.prepare('UPDATE classes SET student_count=(SELECT COUNT(*) FROM students WHERE class_id=?),version=version+1,updated_at=? WHERE id=?')
       .bind(row.class_id, nowIso(), row.class_id)
@@ -929,6 +1011,58 @@ async function deleteBoardPost(env, session, payload) {
   return { deleted: true };
 }
 
+async function upsertIdeaPost(env, session, payload) {
+  const idea = await env.DB.prepare(
+    "SELECT * FROM contents WHERE id=? AND class_id=? AND type='idea'"
+  ).bind(String(payload.ideaId || ''), session.class_id).first();
+  if (!idea) throw new AppError('아이디어 구름을 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  if (idea.status === 'closed') throw new AppError('지금은 의견 작성을 마감했어요.', 'IDEA_CLOSED');
+  const student = await env.DB.prepare('SELECT * FROM students WHERE id=? AND class_id=?')
+    .bind(session.user_id, session.class_id).first();
+  if (!student) throw new AppError('학생 정보를 찾을 수 없습니다.', 'UNAUTHORIZED', 401);
+  const text = String(payload.text || '').trim();
+  const groupName = String(payload.groupName || '').trim();
+  if (!text) throw new AppError('의견을 입력해 주세요.', 'EMPTY_IDEA_POST');
+  if (text.length > 100) throw new AppError('의견은 100자 이내로 작성해 주세요.', 'IDEA_POST_TOO_LONG');
+  if (groupName && !/^(?:[1-9]|1[0-2])모둠$/.test(groupName)) {
+    throw new AppError('모둠을 다시 선택해 주세요.', 'INVALID_GROUP');
+  }
+  const time = nowIso();
+  const postId = String(payload.postId || '');
+  let row;
+  if (postId) {
+    row = await env.DB.prepare('SELECT * FROM idea_posts WHERE id=? AND idea_id=? AND student_id=?')
+      .bind(postId, idea.id, student.id).first();
+    if (!row) throw new AppError('수정할 의견을 찾을 수 없습니다.', 'NOT_FOUND', 404);
+    await env.DB.prepare(
+      'UPDATE idea_posts SET text=?,group_name=?,student_name=?,student_number=?,updated_at=? WHERE id=?'
+    ).bind(text, groupName, student.name, student.number, time, row.id).run();
+  } else {
+    const id = uid('idea_post');
+    await env.DB.prepare(
+      'INSERT INTO idea_posts(id,idea_id,class_id,student_id,student_number,student_name,group_name,text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)'
+    ).bind(id, idea.id, student.class_id, student.id, student.number, student.name, groupName, text, time, time).run();
+    row = await env.DB.prepare('SELECT * FROM idea_posts WHERE id=?').bind(id).first();
+  }
+  await touchClass(env, student.class_id);
+  row = await env.DB.prepare('SELECT * FROM idea_posts WHERE id=?').bind(row.id).first();
+  return ideaPostJson(row, false, student.id);
+}
+
+async function deleteIdeaPost(env, session, payload) {
+  const row = await env.DB.prepare('SELECT * FROM idea_posts WHERE id=?')
+    .bind(String(payload.postId || '')).first();
+  if (!row) return { deleted: true };
+  if (session.role === 'student') {
+    if (row.student_id !== session.user_id) throw new AppError('내 의견만 삭제할 수 있습니다.', 'FORBIDDEN', 403);
+  } else {
+    await ownedClass(env, session, row.class_id);
+  }
+  await env.DB.prepare('DELETE FROM idea_posts WHERE id=?').bind(row.id).run();
+  await touchClass(env, row.class_id);
+  return { deleted: true };
+}
+
 async function reviewBoardPost(env, session, payload) {
   const row = await env.DB.prepare('SELECT * FROM board_posts WHERE id=? AND class_id=?')
     .bind(String(payload.postId || ''), String(payload.classId || '')).first();
@@ -947,6 +1081,28 @@ async function reviewBoardPost(env, session, payload) {
   return result;
 }
 
+async function startClassTimer(env, session, payload) {
+  const classRow = await ownedClass(env, session, payload.classId);
+  const title = String(payload.title || '활동 시간').trim().slice(0, 50) || '활동 시간';
+  const durationSeconds = Math.min(7200, Math.max(10, Number(payload.durationSeconds || 0)));
+  if (!Number.isFinite(durationSeconds)) throw new AppError('활동 시간을 확인해 주세요.', 'INVALID_TIMER');
+  const startedAt = nowIso();
+  const endsAt = new Date(Date.now() + durationSeconds * 1000).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO class_timers(class_id,title,started_at,ends_at,updated_at) VALUES(?,?,?,?,?)
+     ON CONFLICT(class_id) DO UPDATE SET title=excluded.title,started_at=excluded.started_at,ends_at=excluded.ends_at,updated_at=excluded.updated_at`
+  ).bind(classRow.id, title, startedAt, endsAt, startedAt).run();
+  await touchClass(env, classRow.id);
+  return timerJson(await env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classRow.id).first());
+}
+
+async function clearClassTimer(env, session, payload) {
+  const classRow = await ownedClass(env, session, payload.classId);
+  await env.DB.prepare('DELETE FROM class_timers WHERE class_id=?').bind(classRow.id).run();
+  await touchClass(env, classRow.id);
+  return { cleared: true };
+}
+
 async function heartbeat(env, session, payload) {
   const classId = session.role === 'student' ? session.class_id : String(payload.classId || '');
   if (session.role === 'student') {
@@ -956,7 +1112,8 @@ async function heartbeat(env, session, payload) {
     await ownedClass(env, session, classId);
   }
   const classRow = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
-  const result = { version: Number(classRow && classRow.version || 1) };
+  const activeTimer = await env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first();
+  const result = { version: Number(classRow && classRow.version || 1), timer: timerJson(activeTimer) };
   if (session.role === 'student') {
     const reviewRows = await all(env.DB.prepare(
       'SELECT id,status,updated_at FROM board_posts WHERE class_id=? AND student_id=? ORDER BY updated_at DESC'
@@ -1259,9 +1416,10 @@ async function handleAction(request, env) {
   const teacherActions = new Set([
     'teacherDashboard', 'createClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
-    'deleteStudent', 'reviewBoardPost', 'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus'
+    'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
+    'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus'
   ]);
-  const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost']);
+  const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
   let role = '';
   if (teacherActions.has(action)) role = 'teacher';
   else if (studentActions.has(action)) role = 'student';
@@ -1287,7 +1445,11 @@ async function handleAction(request, env) {
     case 'deleteSubmission': return deleteSubmission(env, session, payload);
     case 'upsertBoardPost': return upsertBoardPost(env, session, payload);
     case 'deleteBoardPost': return deleteBoardPost(env, session, payload);
+    case 'upsertIdeaPost': return upsertIdeaPost(env, session, payload);
+    case 'deleteIdeaPost': return deleteIdeaPost(env, session, payload);
     case 'reviewBoardPost': return reviewBoardPost(env, session, payload);
+    case 'startClassTimer': return startClassTimer(env, session, payload);
+    case 'clearClassTimer': return clearClassTimer(env, session, payload);
     case 'heartbeat': return heartbeat(env, session, payload);
     case 'prepareFileAccess': return prepareFileAccess(env, request, session, payload);
     case 'getFileContent': return prepareFileAccess(env, request, session, { fileId: payload.fileId, intent: 'preview' });

@@ -402,7 +402,8 @@
     [
       { key: 'announcements', fallback: '수업 안내' },
       { key: 'assignments', fallback: '학습 활동' },
-      { key: 'boards', fallback: '생각 나눔' }
+      { key: 'boards', fallback: '생각 나눔' },
+      { key: 'ideas', fallback: '아이디어 구름' }
     ].forEach(function (group) {
       (state[group.key] || []).forEach(function (item) {
         if (typeof item.category === 'undefined') {
@@ -415,13 +416,19 @@
         }
       });
     });
-    ['submissions', 'boardPosts'].forEach(function (key) {
+    ['submissions', 'boardPosts', 'ideaPosts'].forEach(function (key) {
       (state[key] || []).forEach(function (item) {
         if (!Array.isArray(item.attachments)) {
           item.attachments = [];
           changed = true;
         }
       });
+    });
+    if (!Array.isArray(state.ideas)) { state.ideas = []; changed = true; }
+    if (!Array.isArray(state.ideaPosts)) { state.ideaPosts = []; changed = true; }
+    if (!state.timers || typeof state.timers !== 'object') { state.timers = {}; changed = true; }
+    (state.ideaPosts || []).forEach(function (item) {
+      if (typeof item.groupName === 'undefined') { item.groupName = ''; changed = true; }
     });
     return changed;
   }
@@ -432,8 +439,10 @@
     var announcements = [];
     var assignments = [];
     var boards = [];
+    var ideas = [];
     var submissions = [];
     var boardPosts = [];
+    var ideaPosts = [];
     var subjects = ['사회', '도덕', '사회', '도덕'];
     for (var c = 1; c <= 12; c += 1) {
       var classId = 'class_' + c;
@@ -494,6 +503,32 @@
         createdAt: nowIso(),
         updatedAt: nowIso()
       });
+      ideas.push({
+        id: 'idea_' + c,
+        classId: classId,
+        title: c === 1 ? '우리 반이 생각하는 좋은 친구란?' : '오늘 수업에서 떠오른 생각',
+        body: '친구들이 함께 읽을 수 있도록 짧은 의견을 익명으로 남겨 보세요.',
+        category: '아이디어 구름',
+        status: 'open',
+        attachments: [],
+        responseCount: c === 1 ? 3 : 0,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+    }
+    for (var ideaIndex = 1; ideaIndex <= 3; ideaIndex += 1) {
+      ideaPosts.push({
+        id: 'idea_post_' + ideaIndex,
+        ideaId: 'idea_1',
+        classId: 'class_1',
+        studentId: 'class_1_student_' + ideaIndex,
+        studentNumber: ideaIndex,
+        studentName: '학생 ' + ideaIndex,
+        groupName: ideaIndex < 3 ? '1모둠' : '2모둠',
+        text: ['서로의 이야기를 끝까지 들어 주는 친구', '힘들 때 먼저 다가와 주는 친구', '다름을 놀리지 않고 존중하는 친구'][ideaIndex - 1],
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
     }
     for (var p = 1; p <= 5; p += 1) {
       boardPosts.push({
@@ -517,8 +552,11 @@
       announcements: announcements,
       assignments: assignments,
       boards: boards,
+      ideas: ideas,
       submissions: submissions,
-      boardPosts: boardPosts
+      boardPosts: boardPosts,
+      ideaPosts: ideaPosts,
+      timers: {}
     };
   }
 
@@ -547,6 +585,7 @@
       .sort(function (a, b) { return Number(a.number) - Number(b.number); });
     var classSubmissions = state.submissions.filter(function (item) { return item.classId === classId; });
     var classPosts = state.boardPosts.filter(function (item) { return item.classId === classId; });
+    var classIdeaPosts = state.ideaPosts.filter(function (item) { return item.classId === classId; });
     var assignmentItems = state.assignments.filter(function (item) { return item.classId === classId; }).map(function (item) {
       return Object.assign({}, item, {
         submissionCount: classSubmissions.filter(function (submission) {
@@ -559,12 +598,18 @@
         postCount: classPosts.filter(function (post) { return post.boardId === item.id; }).length
       });
     });
+    var ideaItems = state.ideas.filter(function (item) { return item.classId === classId; }).map(function (item) {
+      return Object.assign({}, item, {
+        responseCount: classIdeaPosts.filter(function (post) { return post.ideaId === item.id; }).length
+      });
+    });
     return {
       classInfo: clone(classInfo),
       students: clone(classStudents),
       announcements: clone(state.announcements.filter(function (item) { return item.classId === classId; })),
       assignments: clone(assignmentItems),
       boards: clone(boardItems),
+      ideas: clone(ideaItems),
       submissions: clone(classSubmissions.filter(function (item) {
         return !studentId || item.studentId === studentId;
       })),
@@ -572,12 +617,26 @@
         if (!studentId || item.studentId === studentId) return item;
         return Object.assign({}, item, { status: 'published', revisionMessage: '' });
       })),
+      ideaPosts: clone(classIdeaPosts.map(function (item) {
+        if (!studentId) return item;
+        return {
+          id: item.id,
+          ideaId: item.ideaId,
+          classId: item.classId,
+          text: item.text,
+          groupName: item.groupName || '',
+          mine: item.studentId === studentId,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt
+        };
+      })),
+      timer: clone(state.timers[classId] || null),
       onlineStudents: clone(classStudents.filter(function (item) { return item.online; }))
     };
   }
 
   function demoAttachmentOwner(state, fileId) {
-    var collections = [state.announcements, state.assignments, state.boards];
+    var collections = [state.announcements, state.assignments, state.boards, state.ideas || []];
     for (var i = 0; i < collections.length; i += 1) {
       if (collections[i].some(function (item) {
         return (item.attachments || []).some(function (file) { return String(file.id) === String(fileId); });
@@ -694,15 +753,16 @@
           throw new ApiError('클래스 코드가 일치하지 않습니다.', 'CLASS_CODE_MISMATCH');
         }
         var classFileIds = [];
-        ['announcements', 'assignments', 'boards', 'submissions', 'boardPosts'].forEach(function (key) {
+        ['announcements', 'assignments', 'boards', 'ideas', 'submissions', 'boardPosts', 'ideaPosts'].forEach(function (key) {
           classFileIds = classFileIds.concat(attachmentIds(state[key].filter(function (item) {
             return item.classId === payload.classId;
           })));
         });
         state.classes = state.classes.filter(function (item) { return item.id !== payload.classId; });
-        ['students', 'announcements', 'assignments', 'boards', 'submissions', 'boardPosts'].forEach(function (key) {
+        ['students', 'announcements', 'assignments', 'boards', 'ideas', 'submissions', 'boardPosts', 'ideaPosts'].forEach(function (key) {
           state[key] = state[key].filter(function (item) { return item.classId !== payload.classId; });
         });
+        delete state.timers[payload.classId];
         await deleteDemoFiles(classFileIds);
         setDemoState(state);
         return { deleted: true };
@@ -719,7 +779,7 @@
       }
 
       if (action === 'upsertContent') {
-        var tableMap = { announcement: 'announcements', assignment: 'assignments', board: 'boards' };
+        var tableMap = { announcement: 'announcements', assignment: 'assignments', board: 'boards', idea: 'ideas' };
         var table = tableMap[payload.type];
         if (!table) throw new ApiError('잘못된 자료 유형입니다.', 'INVALID_TYPE');
         var existing = state[table].find(function (item) { return item.id === payload.id; });
@@ -746,7 +806,7 @@
       }
 
       if (action === 'deleteContent') {
-        var deleteMap = { announcement: 'announcements', assignment: 'assignments', board: 'boards' };
+        var deleteMap = { announcement: 'announcements', assignment: 'assignments', board: 'boards', idea: 'ideas' };
         var deleteTable = deleteMap[payload.type];
         if (!deleteTable) throw new ApiError('잘못된 자료 유형입니다.', 'INVALID_TYPE');
         var deleteTarget = state[deleteTable].find(function (item) { return item.id === payload.id; });
@@ -760,6 +820,9 @@
           var relatedPosts = state.boardPosts.filter(function (item) { return item.boardId === payload.id; });
           relatedItems = relatedItems.concat(relatedPosts);
           state.boardPosts = state.boardPosts.filter(function (item) { return item.boardId !== payload.id; });
+        }
+        if (payload.type === 'idea') {
+          state.ideaPosts = state.ideaPosts.filter(function (item) { return item.ideaId !== payload.id; });
         }
         state[deleteTable] = state[deleteTable].filter(function (item) { return item.id !== payload.id; });
         await deleteDemoFiles(attachmentIds(relatedItems));
@@ -827,6 +890,7 @@
         state.students = state.students.filter(function (item) { return item.id !== payload.studentId; });
         state.submissions = state.submissions.filter(function (item) { return item.studentId !== payload.studentId; });
         state.boardPosts = state.boardPosts.filter(function (item) { return item.studentId !== payload.studentId; });
+        state.ideaPosts = state.ideaPosts.filter(function (item) { return item.studentId !== payload.studentId; });
         await deleteDemoFiles(attachmentIds(studentSubmissions.concat(studentPosts)));
         setDemoState(state);
         return { deleted: true };
@@ -958,6 +1022,73 @@
         return clone(reviewed);
       }
 
+      if (action === 'upsertIdeaPost') {
+        var ideaSession = readSession('student');
+        if (!ideaSession) throw new ApiError('학생 로그인이 필요합니다.', 'UNAUTHORIZED');
+        var ideaText = String(payload.text || '').trim();
+        var ideaGroup = String(payload.groupName || '').trim();
+        if (!ideaText) throw new ApiError('의견을 입력해 주세요.', 'EMPTY_IDEA_POST');
+        if (ideaText.length > 100) throw new ApiError('의견은 100자 이내로 작성해 주세요.', 'IDEA_POST_TOO_LONG');
+        if (ideaGroup && !/^(?:[1-9]|1[0-2])모둠$/.test(ideaGroup)) {
+          throw new ApiError('모둠을 다시 선택해 주세요.', 'INVALID_GROUP');
+        }
+        var ideaPost = state.ideaPosts.find(function (item) {
+          return item.id === payload.postId && item.studentId === ideaSession.user.id;
+        });
+        if (payload.postId && !ideaPost) throw new ApiError('수정할 의견을 찾을 수 없습니다.', 'NOT_FOUND');
+        if (ideaPost) {
+          ideaPost.text = ideaText;
+          ideaPost.groupName = ideaGroup;
+          ideaPost.updatedAt = nowIso();
+        } else {
+          ideaPost = {
+            id: uid('idea_post'),
+            ideaId: payload.ideaId,
+            classId: ideaSession.classInfo.id,
+            studentId: ideaSession.user.id,
+            studentNumber: ideaSession.user.number,
+            studentName: ideaSession.user.name,
+            groupName: ideaGroup,
+            text: ideaText,
+            createdAt: nowIso(),
+            updatedAt: nowIso()
+          };
+          state.ideaPosts.push(ideaPost);
+        }
+        setDemoState(state);
+        return clone(ideaPost);
+      }
+
+      if (action === 'deleteIdeaPost') {
+        var ideaDeleteSession = role === 'student' ? readSession('student') : null;
+        state.ideaPosts = state.ideaPosts.filter(function (item) {
+          if (item.id !== payload.postId) return true;
+          return Boolean(ideaDeleteSession && item.studentId !== ideaDeleteSession.user.id);
+        });
+        setDemoState(state);
+        return { deleted: true };
+      }
+
+      if (action === 'startClassTimer') {
+        var demoStartedAt = nowIso();
+        var demoTimer = {
+          classId: payload.classId,
+          title: String(payload.title || '활동 시간').trim() || '활동 시간',
+          startedAt: demoStartedAt,
+          endsAt: new Date(Date.now() + Math.max(10, Number(payload.durationSeconds || 60)) * 1000).toISOString(),
+          updatedAt: demoStartedAt
+        };
+        state.timers[payload.classId] = demoTimer;
+        setDemoState(state);
+        return clone(demoTimer);
+      }
+
+      if (action === 'clearClassTimer') {
+        delete state.timers[payload.classId];
+        setDemoState(state);
+        return { cleared: true };
+      }
+
       if (action === 'createDownloadBundle') {
         var sample = btoa(unescape(encodeURIComponent('미리보기 모드의 일괄 다운로드 예시 파일입니다.')));
         return {
@@ -999,7 +1130,8 @@
       }
 
       if (action === 'heartbeat') {
-        return { onlineStudents: [] };
+        var heartbeatClassId = payload.classId || (readSession('student') && readSession('student').classInfo.id);
+        return { onlineStudents: [], timer: clone(state.timers[heartbeatClassId] || null) };
       }
 
       throw new ApiError('미리보기 모드에서 지원하지 않는 요청입니다: ' + action, 'DEMO_NOT_IMPLEMENTED');

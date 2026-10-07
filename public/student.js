@@ -8,10 +8,13 @@
   var heartbeatTimer = null;
   var heartbeatVisibilityHandler = null;
   var studentPostFilters = { type: 'all', category: 'all' };
+  var selectedIdeas = {};
+  var ideaGroupViews = {};
   var activeContainer = null;
   var activeTab = 'announcements';
   var heartbeatBusy = false;
   var studentRefreshBusy = false;
+  var countdownTimer = null;
 
   function sessionOrLogin() {
     var session = window.LearnSession.get('student');
@@ -35,7 +38,7 @@
   stopHeartbeat();
 
   var safeTab =
-    ['posts', 'announcements', 'assignments', 'boards'].indexOf(tab) >= 0
+    ['posts', 'announcements', 'assignments', 'boards', 'ideas'].indexOf(tab) >= 0
       ? tab
       : 'announcements';
   activeTab = safeTab;
@@ -77,6 +80,8 @@
       });
   }
 
+  }
+
   async function refreshClassSilently() {
     if (studentRefreshBusy || !activeContainer || !activeContainer.isConnected) return;
     studentRefreshBusy = true;
@@ -96,16 +101,15 @@
         window.LearnSession.clear('student');
         if (window.LearnNavigation) window.LearnNavigation.clear('student');
         location.hash = '#/student/login';
-        return;
       }
     } finally {
       studentRefreshBusy = false;
     }
   }
-  }
 
   function paintClass(container, tab, session) {
     var classId = studentData.classInfo.id;
+    var ideas = studentData.ideas || [];
     container.innerHTML =
       '<section class="app-page">' +
         '<header class="workspace-head">' +
@@ -115,11 +119,13 @@
           '<div class="inline-actions"><button class="button secondary small" type="button" data-refresh>새로고침</button>' +
             '<button class="button small" type="button" data-student-logout>나가기</button></div>' +
         '</header>' +
+        timerBanner(studentData.timer) +
         '<nav class="tab-bar" aria-label="우리 반 메뉴">' +
-          studentTab('posts', '글 목록', studentData.announcements.length + studentData.assignments.length + studentData.boards.length, tab) +
+          studentTab('posts', '글 목록', studentData.announcements.length + studentData.assignments.length + studentData.boards.length + ideas.length, tab) +
           studentTab('announcements', '공지', studentData.announcements.length, tab) +
           studentTab('assignments', '과제', studentData.assignments.length, tab) +
           studentTab('boards', '보드', studentData.boards.length, tab) +
+          studentTab('ideas', '아이디어 구름', ideas.length, tab) +
         '</nav>' +
         '<section class="panel content-panel">' + renderTab(tab, session) + '</section>' +
       '</section>';
@@ -131,6 +137,7 @@
     });
     bindTabActions(container, tab, session);
     UI.bindFiles(container, 'student');
+    startCountdownTicker();
   }
 
   function studentTab(key, label, count, active) {
@@ -138,10 +145,36 @@
       UI.escape(label) + '<span class="tab-count">' + UI.escape(count) + '</span></a>';
   }
 
+  function timerBanner(timer) {
+    if (!timer) return '';
+    return '<section class="class-timer student-timer" aria-live="polite"><div><span class="timer-kicker">ACTIVITY TIMER</span><strong>' +
+      UI.escape(timer.title || '활동 시간') + '</strong></div><b data-timer-countdown data-timer-ends="' +
+      UI.attr(timer.endsAt || '') + '">--:--</b></section>';
+  }
+
+  function startCountdownTicker() {
+    if (countdownTimer) window.clearInterval(countdownTimer);
+    function tick() {
+      document.querySelectorAll('[data-timer-countdown]').forEach(function (node) {
+        var seconds = Math.max(0, Math.ceil((new Date(node.dataset.timerEnds).getTime() - Date.now()) / 1000));
+        var hours = Math.floor(seconds / 3600);
+        var minutes = Math.floor((seconds % 3600) / 60);
+        var remainder = seconds % 60;
+        node.textContent = seconds
+          ? (hours ? hours + ':' : '') + String(minutes).padStart(2, '0') + ':' + String(remainder).padStart(2, '0')
+          : '시간 종료';
+        node.closest('.class-timer').classList.toggle('ended', !seconds);
+      });
+    }
+    tick();
+    countdownTimer = window.setInterval(tick, 1000);
+  }
+
   function renderTab(tab, session) {
     if (tab === 'posts') return renderStudentPostIndex(session);
     if (tab === 'assignments') return renderAssignments(session);
     if (tab === 'boards') return renderBoards(session);
+    if (tab === 'ideas') return renderIdeas(session);
     return renderAnnouncements();
   }
 
@@ -158,7 +191,8 @@
     [
       { type: 'announcement', label: '공지', items: studentData.announcements },
       { type: 'assignment', label: '과제', items: studentData.assignments },
-      { type: 'board', label: '보드', items: studentData.boards }
+      { type: 'board', label: '보드', items: studentData.boards },
+      { type: 'idea', label: '아이디어 구름', items: studentData.ideas || [] }
     ].forEach(function (group) {
       group.items.forEach(function (item) {
         entries.push({ type: group.type, label: group.label, item: item });
@@ -191,10 +225,11 @@
     var typeOptions = filterOption('all', '전체 글', studentPostFilters.type) +
       filterOption('announcement', '공지', studentPostFilters.type) +
       filterOption('assignment', '과제', studentPostFilters.type) +
-      filterOption('board', '보드', studentPostFilters.type);
+      filterOption('board', '보드', studentPostFilters.type) +
+      filterOption('idea', '아이디어 구름', studentPostFilters.type);
     var categoryOptions = filterOption('all', '전체 카테고리', studentPostFilters.category) +
       categories.map(function (category) { return filterOption(category, category, studentPostFilters.category); }).join('');
-    var head = '<div class="content-head"><div><h2>글 목록</h2><p>우리 반 공지·과제·보드를 최신 글부터 확인하세요.</p></div>' +
+    var head = '<div class="content-head"><div><h2>글 목록</h2><p>우리 반 공지·과제·보드·아이디어 구름을 최신 글부터 확인하세요.</p></div>' +
       '<span class="post-result-count">' + filtered.length + '개</span></div>' +
       '<div class="post-filter-bar"><label><span>글 종류</span><select data-post-type-filter>' + typeOptions + '</select></label>' +
         '<label><span>카테고리</span><select data-post-category-filter>' + categoryOptions + '</select></label></div>';
@@ -205,7 +240,7 @@
   function studentPostIndexCard(entry) {
     var item = entry.item;
     var dataAttribute = entry.type === 'announcement' ? 'data-view-announcement' :
-      (entry.type === 'assignment' ? 'data-view-assignment' : 'data-view-board');
+      (entry.type === 'assignment' ? 'data-view-assignment' : (entry.type === 'board' ? 'data-view-board' : 'data-view-idea'));
     var excerpt = String(item.body || '').trim() || ((item.attachments || []).length ? '첨부파일이 있는 글입니다.' : '작성된 내용이 없어요.');
     return '<article class="blog-row content-clickable" tabindex="0" ' + dataAttribute + '="' + UI.attr(item.id) +
       '" aria-label="' + UI.attr(item.title + ' 상세 보기') + '">' +
@@ -330,6 +365,63 @@
       '<div class="board-grid">' + cards + '</div>';
   }
 
+  function ideaGroupOrder(name) {
+    var match = String(name || '').match(/^(\d+)모둠$/);
+    return match ? Number(match[1]) : 99;
+  }
+
+  function ideaPostCard(post, index) {
+    return '<article class="idea-response-card ' + (post.mine ? 'mine' : '') + '">' +
+      '<div class="idea-response-head"><div><strong>' + (post.mine ? '내 의견' : '익명 의견 ' + (index + 1)) + '</strong>' +
+        (post.groupName ? '<span class="idea-group-badge">' + UI.escape(post.groupName) + '</span>' : '<span class="idea-group-badge individual">개별</span>') +
+      '</div>' + (post.mine ? '<div class="inline-actions"><button class="button ghost small" type="button" data-edit-idea-post="' + UI.attr(post.id) + '">수정</button>' +
+        '<button class="text-link" type="button" data-delete-idea-post="' + UI.attr(post.id) + '">삭제</button></div>' : '') + '</div>' +
+      '<p>' + UI.nl2br(post.text) + '</p><small>' + UI.escape(UI.date(post.updatedAt || post.createdAt, true)) +
+        (post.updatedAt !== post.createdAt ? ' · 수정됨' : '') + '</small></article>';
+  }
+
+  function studentIdeaFeed(posts, grouped) {
+    if (!posts.length) return UI.empty('아직 의견이 없어요', '첫 번째 익명 의견을 남겨 보세요.');
+    if (!grouped) {
+      return '<div class="idea-feed">' + posts.map(ideaPostCard).join('') + '</div>';
+    }
+    var names = Array.from(new Set(posts.map(function (post) { return post.groupName || '개별 의견'; }))).sort(function (a, b) {
+      return ideaGroupOrder(a) - ideaGroupOrder(b) || a.localeCompare(b, 'ko');
+    });
+    return '<div class="idea-group-list">' + names.map(function (name) {
+      var groupedPosts = posts.filter(function (post) { return (post.groupName || '개별 의견') === name; });
+      return '<section class="idea-group-section"><h3>' + UI.escape(name) + '<span>' + groupedPosts.length + '개</span></h3>' +
+        '<div class="idea-feed">' + groupedPosts.map(function (post) { return ideaPostCard(post, posts.indexOf(post)); }).join('') + '</div></section>';
+    }).join('') + '</div>';
+  }
+
+  function renderIdeas() {
+    var classId = studentData.classInfo.id;
+    var ideas = studentData.ideas || [];
+    var head = '<div class="content-head"><div><h2>아이디어 구름</h2><p>이름은 보이지 않아요. 짧은 생각을 자유롭게 나누거나 모둠별로 모아 보세요.</p></div></div>';
+    if (!ideas.length) return head + UI.empty('열린 아이디어 구름이 없어요', '선생님이 질문을 만들면 이곳에 표시됩니다.');
+    var selectedId = selectedIdeas[classId];
+    if (!selectedId || !ideas.some(function (idea) { return idea.id === selectedId; })) selectedId = ideas[0].id;
+    selectedIdeas[classId] = selectedId;
+    var idea = ideas.find(function (item) { return item.id === selectedId; });
+    var posts = (studentData.ideaPosts || []).filter(function (post) { return post.ideaId === selectedId; });
+    var grouped = Boolean(ideaGroupViews[selectedId]);
+    var selectors = ideas.length > 1 ? '<div class="toolbar" style="margin-bottom:20px">' + ideas.map(function (item) {
+      return '<button class="button small ' + (item.id === selectedId ? '' : 'secondary') + '" type="button" data-select-idea="' +
+        UI.attr(item.id) + '">' + UI.escape(item.title) + '</button>';
+    }).join('') + '</div>' : '';
+    return head + selectors +
+      '<article class="item-card idea-prompt-card"><div class="item-top"><div><h3>' + UI.escape(idea.title) + '</h3>' +
+        '<div class="meta-line">' + categoryBadge(idea) + '<span class="status-badge ' + (idea.status === 'open' ? 'open' : '') + '">' +
+          (idea.status === 'open' ? '의견 작성 가능' : '마감') + '</span><span>의견 ' + posts.length + '개</span></div></div>' +
+        (idea.status === 'open' ? '<button class="button small" type="button" data-add-idea-post>＋ 의견 남기기</button>' : '') + '</div>' +
+        (idea.body ? '<p class="item-body">' + UI.escape(idea.body) + '</p>' : '') + UI.attachments(idea.attachments, 'student') + '</article>' +
+      '<div class="idea-view-toolbar student"><div class="sort-choice" role="group" aria-label="의견 정렬">' +
+        '<button class="sort-choice-button ' + (!grouped ? 'active' : '') + '" type="button" data-idea-view="time">작성 순서</button>' +
+        '<button class="sort-choice-button ' + (grouped ? 'active' : '') + '" type="button" data-idea-view="group">모둠별</button></div></div>' +
+      studentIdeaFeed(posts, grouped);
+  }
+
   function bindDetailCard(card, open) {
     function activate(event) {
       if (event && event.target.closest('button, a, input, textarea, select, label, [data-view-own-submission]')) return;
@@ -367,6 +459,12 @@
         (item.status === 'open' ? '작성 가능' : '읽기 전용') + '</span>';
       meta.push('게시 ' + (item.postCount || 0) + '/' + studentData.students.length + '명');
     }
+    if (type === 'idea') {
+      badge = '<span class="status-badge ' + (item.status === 'open' ? 'open' : '') + '">' +
+        (item.status === 'open' ? '의견 작성 가능' : '마감') + '</span>';
+      meta.push('의견 ' + (item.responseCount || 0) + '개');
+      action = '<div class="modal-actions compact-actions"><button class="button small" type="button" data-open-idea-tab>아이디어 구름 보기</button></div>';
+    }
     var dialog = UI.modal({
       title: item.title,
       wide: true,
@@ -381,6 +479,12 @@
     var submit = dialog.querySelector('[data-detail-submit]');
     if (submit) submit.addEventListener('click', function () {
       openSubmissionEditor(item, submission, container, tab);
+    });
+    var openIdea = dialog.querySelector('[data-open-idea-tab]');
+    if (openIdea) openIdea.addEventListener('click', function () {
+      selectedIdeas[studentData.classInfo.id] = item.id;
+      UI.closeModal();
+      location.hash = '#/student/class/ideas';
     });
   }
 
@@ -412,6 +516,40 @@
         var item = studentData.boards.find(function (entry) { return entry.id === card.dataset.viewBoard; });
         if (item) openStudentContentDetail('board', item, session, container, tab);
       });
+    });
+    container.querySelectorAll('[data-view-idea]').forEach(function (card) {
+      bindDetailCard(card, function () {
+        var item = (studentData.ideas || []).find(function (entry) { return entry.id === card.dataset.viewIdea; });
+        if (item) openStudentContentDetail('idea', item, session, container, tab);
+      });
+    });
+    container.querySelectorAll('[data-select-idea]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        selectedIdeas[studentData.classInfo.id] = button.dataset.selectIdea;
+        paintClass(container, tab, session);
+      });
+    });
+    container.querySelectorAll('[data-idea-view]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var ideaId = selectedIdeas[studentData.classInfo.id];
+        ideaGroupViews[ideaId] = button.dataset.ideaView === 'group';
+        paintClass(container, tab, session);
+      });
+    });
+    var addIdeaPost = container.querySelector('[data-add-idea-post]');
+    if (addIdeaPost) addIdeaPost.addEventListener('click', function () {
+      var idea = (studentData.ideas || []).find(function (item) { return item.id === selectedIdeas[studentData.classInfo.id]; });
+      if (idea) openIdeaEditor(idea, null, container, tab);
+    });
+    container.querySelectorAll('[data-edit-idea-post]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var idea = (studentData.ideas || []).find(function (item) { return item.id === selectedIdeas[studentData.classInfo.id]; });
+        var post = (studentData.ideaPosts || []).find(function (item) { return item.id === button.dataset.editIdeaPost && item.mine; });
+        if (idea && post) openIdeaEditor(idea, post, container, tab);
+      });
+    });
+    container.querySelectorAll('[data-delete-idea-post]').forEach(function (button) {
+      button.addEventListener('click', function () { deleteIdeaPost(button.dataset.deleteIdeaPost, container, tab); });
     });
     container.querySelectorAll('[data-submit-assignment]').forEach(function (button) {
       button.addEventListener('click', function () {
@@ -505,6 +643,64 @@
           '<strong>파일을 끌어놓거나 눌러서 선택</strong><span>이미지, 영상, PDF, Word 등 · 파일당 최대 ' +
             UI.escape((window.LEARN_CONFIG || {}).maxFileSizeMb || 25) + 'MB</span></label>' +
         '<div class="selected-files" data-selected-files></div></div>';
+  }
+
+  function ideaGroupOptions(current) {
+    var options = '<option value="">개별 의견</option>';
+    for (var index = 1; index <= 12; index += 1) {
+      var name = index + '모둠';
+      options += '<option value="' + name + '" ' + (current === name ? 'selected' : '') + '>' + name + '</option>';
+    }
+    return options;
+  }
+
+  function openIdeaEditor(idea, post, container, tab) {
+    var dialog = UI.modal({
+      title: idea.title + (post ? ' · 내 의견 수정' : ' · 의견 남기기'),
+      html: '<form class="form-stack" data-idea-post-form>' +
+        '<div class="info-box">친구들에게는 이름과 출석번호가 보이지 않아요. 모둠을 선택하면 같은 모둠 의견끼리 모아 볼 수 있어요.</div>' +
+        '<div class="field"><label for="idea-group">의견 구분</label><select id="idea-group" name="groupName">' + ideaGroupOptions(post ? post.groupName : '') + '</select></div>' +
+        '<div class="field"><label for="idea-text">나의 의견</label><textarea id="idea-text" name="text" maxlength="100" required placeholder="100자 이내로 자유롭게 작성하세요.">' +
+          UI.escape(post ? post.text : '') + '</textarea><span class="field-help">짧고 분명하게 작성해 주세요. 여러 의견을 따로 올릴 수도 있어요.</span></div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">' +
+          (post ? '수정 저장' : '익명으로 올리기') + '</button></div></form>'
+    });
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-idea-post-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var values = new FormData(form);
+      var text = String(values.get('text') || '').trim();
+      if (!text) { UI.toast('의견을 입력해 주세요.', 'error'); return; }
+      var button = form.querySelector('[type="submit"]');
+      UI.busy(button, true, '등록 중…');
+      try {
+        await API.request('upsertIdeaPost', {
+          ideaId: idea.id,
+          postId: post ? post.id : '',
+          groupName: String(values.get('groupName') || ''),
+          text: text
+        }, 'student');
+        UI.closeModal();
+        await refreshClassSilently();
+        UI.toast(post ? '의견을 수정했습니다.' : '익명 의견을 올렸습니다.');
+      } catch (error) {
+        UI.toast(error.message, 'error');
+        UI.busy(button, false);
+      }
+    });
+  }
+
+  async function deleteIdeaPost(postId, container, tab) {
+    var yes = await UI.confirm({ title: '내 의견 삭제', message: '선택한 익명 의견을 삭제할까요?', confirmText: '삭제', danger: true });
+    if (!yes) return;
+    try {
+      await API.request('deleteIdeaPost', { postId: postId }, 'student');
+      await refreshClassSilently();
+      UI.toast('의견을 삭제했습니다.');
+    } catch (error) {
+      UI.toast(error.message, 'error');
+    }
   }
 
   function openSubmissionEditor(assignment, submission, container, tab) {
@@ -700,7 +896,8 @@
       API.request('heartbeat', { classId: classId }, 'student', 1).then(function (response) {
         var reviewChanged = applyBoardReviews(response && response.boardReviews);
         if (reviewChanged) repaintWithoutJump();
-        if (studentData && response && Number(response.version) !== Number(studentData.classInfo.version)) {
+        if (studentData && response && response.version != null &&
+            Number(response.version) !== Number(studentData.classInfo.version)) {
           return refreshClassSilently();
         }
       }).catch(function () {}).finally(function () { heartbeatBusy = false; });
@@ -720,6 +917,8 @@
     heartbeatTimer = null;
     heartbeatVisibilityHandler = null;
     heartbeatBusy = false;
+    if (countdownTimer) window.clearInterval(countdownTimer);
+    countdownTimer = null;
   }
 
   function editAttachmentOwner(request) {

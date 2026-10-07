@@ -2272,6 +2272,189 @@ video {
   .moderation-actions .button { min-width: 0; padding-right: 10px; padding-left: 10px; }
 }
 
+/* 아이디어 구름 */
+.content-type-badge.idea {
+  background: rgba(219, 211, 255, 0.72);
+  color: #5d5689;
+}
+
+.idea-prompt-card {
+  margin-bottom: 18px;
+  border-color: rgba(151, 142, 201, 0.22);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 14px 32px rgba(93, 86, 137, 0.07);
+}
+
+.idea-view-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 22px 0 16px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.58);
+  backdrop-filter: blur(14px);
+}
+
+.idea-view-toolbar.student { justify-content: flex-end; }
+
+.idea-privacy-note {
+  margin: -4px 0 16px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.idea-feed {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.idea-response-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(147, 150, 162, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 9px 24px rgba(72, 76, 84, 0.05);
+}
+
+.idea-response-card.mine {
+  border-color: rgba(111, 162, 193, 0.42);
+  background: rgba(232, 247, 255, 0.72);
+}
+
+.idea-response-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.idea-response-head > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.idea-response-card p {
+  margin: 14px 0;
+  color: var(--ink);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.idea-response-card small { color: var(--muted); }
+
+.idea-group-badge {
+  display: inline-flex;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(219, 211, 255, 0.62);
+  color: #5d5689;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.idea-group-badge.individual {
+  background: rgba(222, 229, 235, 0.64);
+  color: #69717b;
+}
+
+.idea-group-list { display: grid; gap: 20px; }
+
+.idea-group-section {
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  border-radius: 22px;
+  background: rgba(244, 245, 252, 0.54);
+}
+
+.idea-group-section > h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 13px;
+  font-size: 1rem;
+}
+
+.idea-group-section > h3 span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* 수업 활동 타이머 */
+.class-timer {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: -4px 0 18px;
+  padding: 15px 18px;
+  border: 1px solid rgba(134, 157, 193, 0.22);
+  border-radius: 19px;
+  background: linear-gradient(115deg, rgba(240, 247, 255, 0.86), rgba(248, 241, 252, 0.82));
+  box-shadow: 0 12px 30px rgba(74, 91, 119, 0.07);
+  backdrop-filter: blur(16px);
+}
+
+.class-timer > div:first-child {
+  display: grid;
+  gap: 2px;
+  margin-right: auto;
+}
+
+.timer-kicker {
+  color: #7a7891;
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.class-timer > b {
+  min-width: 116px;
+  color: #343746;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.class-timer.ended {
+  border-color: rgba(206, 118, 139, 0.26);
+  background: rgba(255, 239, 243, 0.8);
+}
+
+.class-timer.ended > b { color: #a2455c; font-size: 1.08rem; }
+
+.timer-quick-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.timer-quick-buttons button {
+  padding: 8px 13px;
+  border: 1px solid rgba(130, 136, 150, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .idea-feed { grid-template-columns: 1fr; }
+  .idea-view-toolbar { align-items: stretch; flex-direction: column; }
+  .idea-view-toolbar .sort-choice { width: 100%; }
+  .idea-view-toolbar .sort-choice-button { flex: 1; }
+  .class-timer { flex-wrap: wrap; }
+  .class-timer > b { min-width: 104px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

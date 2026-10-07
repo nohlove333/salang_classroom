@@ -50,7 +50,7 @@
 
   function studentResumeRoute() {
     var route = storageGet(studentRouteKey);
-    return /^#\/student\/class\/(posts|announcements|assignments|boards)$/.test(route)
+    return /^#\/student\/class\/(posts|announcements|assignments|boards|ideas)$/.test(route)
       ? route
       : '#/student/class/announcements';
   }
@@ -125,7 +125,7 @@
         '<div class="hero-copy-wrap">' +
           '<p class="eyebrow">Classroom archive</p>' +
           '<h1 class="hero-title">사랑스런<span class="learn">(Learn)</span><br>수업 시간</h1>' +
-          '<p class="hero-copy">공지부터 과제 제출, 친구들과 함께 보는 보드까지. 선생님과 학생의 수업 기록을 한곳에 차곡차곡 모아요.</p>' +
+          '<p class="hero-copy">공지와 과제, 함께 보는 보드와 익명 아이디어 구름까지. 선생님과 학생의 수업 기록을 한곳에 차곡차곡 모아요.</p>' +
           '<div class="role-actions">' +
             '<a class="button" href="#/student/login">학생으로 입장</a>' +
           '</div>' +

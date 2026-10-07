@@ -16,6 +16,8 @@
   var activeClassTab = 'announcements';
   var classSortStorageKey = 'learn_teacher_class_sort_v1';
   var teacherPostFilters = { type: 'all', category: 'all' };
+  var countdownTimer = null;
+  var teacherIdeaModalState = null;
 
   function classSortMode() {
     try {
@@ -79,7 +81,7 @@
           '<div class="dashboard-head">' +
             '<div class="section-title"><p class="section-kicker">Teacher studio</p>' +
               '<h1>' + UI.escape((data.teacher.name || '선생님') + '의 클래스') + '</h1>' +
-              '<p>클래스를 열어 공지, 과제, 보드와 학생을 관리하세요.</p></div>' +
+              '<p>클래스를 열어 공지, 과제, 보드, 아이디어 구름과 학생을 관리하세요.</p></div>' +
             '<div class="dashboard-tools">' +
               '<button class="button secondary" type="button" data-logout>로그아웃</button>' +
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
@@ -333,7 +335,7 @@
   async function deleteClass(classId, className, classCode, container) {
     var typed = await UI.confirm({
       title: className + ' 삭제',
-      message: '클래스의 공지, 과제, 보드, 학생 자료가 함께 삭제됩니다. 삭제하려면 클래스 코드를 입력하세요.',
+      message: '클래스의 공지, 과제, 보드, 아이디어 구름, 학생 자료가 함께 삭제됩니다. 삭제하려면 클래스 코드를 입력하세요.',
       inputLabel: '클래스 코드 (' + classCode + ')',
       confirmText: '클래스 삭제',
       danger: true
@@ -352,7 +354,7 @@
     if (!sessionOrLogin()) return;
     activeClassContainer = container;
     stopPresence();
-    var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
+    var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'ideas', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
     activeClassTab = safeTab;
     if (classData && classDataId === String(classId) && !forceRefresh) {
       paintClass(container, classId, safeTab);
@@ -382,6 +384,9 @@
       classData = latest;
       classDataId = String(classId);
       paintClass(activeClassContainer, classId, activeClassTab);
+      if (teacherIdeaModalState && teacherIdeaModalState.dialog && teacherIdeaModalState.dialog.isConnected) {
+        paintTeacherIdeaModal(teacherIdeaModalState, classId, activeClassContainer, activeClassTab);
+      }
       window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
     } catch (error) {
       if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
@@ -391,11 +396,13 @@
   }
 
   function paintClass(container, classId, tab) {
+    var ideas = classData.ideas || [];
     var counts = {
-      posts: classData.announcements.length + classData.assignments.length + classData.boards.length,
+      posts: classData.announcements.length + classData.assignments.length + classData.boards.length + ideas.length,
       announcements: classData.announcements.length,
       assignments: classData.assignments.length,
       boards: classData.boards.length,
+      ideas: ideas.length,
       students: classData.students.length
     };
     container.innerHTML =
@@ -411,13 +418,16 @@
               '</div>' +
               '<div class="inline-actions"><button class="button secondary small" type="button" data-share-student-link>학생 링크 공유</button>' +
                 '<button class="button secondary small" type="button" data-copy-code>코드 복사</button>' +
+                '<button class="button secondary small" type="button" data-open-timer>⏱ 타이머</button>' +
                 '<button class="button small" type="button" data-refresh>새로고침</button></div>' +
             '</header>' +
+            timerBanner(classData.timer, true) +
             '<nav class="tab-bar" aria-label="클래스 관리 메뉴">' +
               tabButton(classId, 'posts', '글 목록', counts.posts, tab) +
               tabButton(classId, 'announcements', '공지', counts.announcements, tab) +
               tabButton(classId, 'assignments', '과제', counts.assignments, tab) +
               tabButton(classId, 'boards', '보드', counts.boards, tab) +
+              tabButton(classId, 'ideas', '아이디어 구름', counts.ideas, tab) +
               tabButton(classId, 'students', '학생 관리', counts.students, tab) +
             '</nav>' +
             '<section class="panel content-panel">' + renderTab(tab, classId) + '</section>' +
@@ -442,14 +452,101 @@
     container.querySelector('[data-refresh]').addEventListener('click', function () {
       renderClass(container, classId, tab, true);
     });
+    container.querySelector('[data-open-timer]').addEventListener('click', function () {
+      openTimerEditor(classId, container, tab);
+    });
+    var clearTimer = container.querySelector('[data-clear-timer]');
+    if (clearTimer) clearTimer.addEventListener('click', function () { clearTimerNow(classId, container, tab); });
     bindTabActions(container, classId, tab);
     UI.bindFiles(container, 'teacher');
+    startCountdownTicker();
   }
 
   function tabButton(classId, key, label, count, active) {
     return '<a class="tab-button ' + (key === active ? 'active' : '') + '" href="#/teacher/class/' +
       UI.attr(classId) + '/' + key + '">' + UI.escape(label) +
       '<span class="tab-count">' + UI.escape(count) + '</span></a>';
+  }
+
+  function timerBanner(timer, teacher) {
+    if (!timer) return '';
+    return '<section class="class-timer" aria-live="polite">' +
+      '<div><span class="timer-kicker">ACTIVITY TIMER</span><strong>' + UI.escape(timer.title || '활동 시간') + '</strong></div>' +
+      '<b data-timer-countdown data-timer-ends="' + UI.attr(timer.endsAt || '') + '">--:--</b>' +
+      (teacher ? '<button class="button ghost small" type="button" data-clear-timer>종료</button>' : '') +
+    '</section>';
+  }
+
+  function countdownText(endsAt) {
+    var seconds = Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 1000));
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var remainder = seconds % 60;
+    var clock = String(minutes).padStart(2, '0') + ':' + String(remainder).padStart(2, '0');
+    if (hours) clock = hours + ':' + clock;
+    return { text: seconds ? clock : '시간 종료', ended: !seconds };
+  }
+
+  function startCountdownTicker() {
+    if (countdownTimer) window.clearInterval(countdownTimer);
+    function tick() {
+      document.querySelectorAll('[data-timer-countdown]').forEach(function (node) {
+        var value = countdownText(node.dataset.timerEnds);
+        node.textContent = value.text;
+        node.closest('.class-timer').classList.toggle('ended', value.ended);
+      });
+    }
+    tick();
+    countdownTimer = window.setInterval(tick, 1000);
+  }
+
+  function openTimerEditor(classId, container, tab) {
+    var dialog = UI.modal({
+      title: '수업 활동 타이머',
+      html: '<form class="form-stack" data-timer-form>' +
+        '<div class="field"><label for="timer-title">활동 이름</label><input id="timer-title" name="title" maxlength="50" value="' +
+          UI.attr(classData.timer ? classData.timer.title : '모둠 활동') + '"></div>' +
+        '<div class="field"><label for="timer-minutes">활동 시간(분)</label><input id="timer-minutes" name="minutes" type="number" min="1" max="120" value="10" required></div>' +
+        '<div class="timer-quick-buttons"><button type="button" data-timer-minute="3">3분</button><button type="button" data-timer-minute="5">5분</button>' +
+          '<button type="button" data-timer-minute="10">10분</button><button type="button" data-timer-minute="15">15분</button><button type="button" data-timer-minute="20">20분</button></div>' +
+        '<div class="info-box">시작하면 학생 화면에도 같은 종료 시각이 표시됩니다.</div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">타이머 시작</button></div>' +
+      '</form>'
+    });
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelectorAll('[data-timer-minute]').forEach(function (button) {
+      button.addEventListener('click', function () { dialog.querySelector('[name="minutes"]').value = button.dataset.timerMinute; });
+    });
+    dialog.querySelector('[data-timer-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var values = new FormData(form);
+      var button = form.querySelector('[type="submit"]');
+      UI.busy(button, true, '시작 중…');
+      try {
+        await API.request('startClassTimer', {
+          classId: classId,
+          title: String(values.get('title') || '').trim(),
+          durationSeconds: Math.round(Number(values.get('minutes') || 0) * 60)
+        }, 'teacher');
+        UI.closeModal();
+        UI.toast('학생 화면에 타이머를 시작했습니다.');
+        renderClass(container, classId, tab, true);
+      } catch (error) {
+        UI.toast(error.message, 'error');
+        UI.busy(button, false);
+      }
+    });
+  }
+
+  async function clearTimerNow(classId, container, tab) {
+    try {
+      await API.request('clearClassTimer', { classId: classId }, 'teacher');
+      UI.toast('타이머를 종료했습니다.');
+      renderClass(container, classId, tab, true);
+    } catch (error) {
+      UI.toast(error.message, 'error');
+    }
   }
 
   function renderPresence(students) {
@@ -472,6 +569,7 @@
     if (tab === 'posts') return renderTeacherPostIndex(classId);
     if (tab === 'assignments') return renderContentList('assignment', classData.assignments, classId);
     if (tab === 'boards') return renderContentList('board', classData.boards, classId);
+    if (tab === 'ideas') return renderContentList('idea', classData.ideas || [], classId);
     if (tab === 'students') return renderStudents(classId);
     return renderContentList('announcement', classData.announcements, classId);
   }
@@ -480,7 +578,8 @@
     return {
       announcement: { plural: '공지', create: '새 공지', empty: '아직 등록된 공지가 없어요', hint: '학생에게 알려 줄 내용을 작성해 보세요.' },
       assignment: { plural: '과제', create: '새 과제', empty: '아직 등록된 과제가 없어요', hint: '제출 기한과 안내를 정해 과제를 등록해 보세요.' },
-      board: { plural: '보드', create: '새 보드', empty: '아직 등록된 보드가 없어요', hint: '학생들이 서로의 생각을 나눌 공간을 만들어 보세요.' }
+      board: { plural: '보드', create: '새 보드', empty: '아직 등록된 보드가 없어요', hint: '학생들이 서로의 생각을 나눌 공간을 만들어 보세요.' },
+      idea: { plural: '아이디어 구름', create: '새 아이디어 구름', empty: '아직 열린 아이디어 구름이 없어요', hint: '학생들이 익명으로 짧은 의견을 나눌 질문을 만들어 보세요.' }
     }[type];
   }
 
@@ -497,7 +596,8 @@
     [
       { type: 'announcement', items: classData.announcements },
       { type: 'assignment', items: classData.assignments },
-      { type: 'board', items: classData.boards }
+      { type: 'board', items: classData.boards },
+      { type: 'idea', items: classData.ideas || [] }
     ].forEach(function (group) {
       group.items.forEach(function (item) { entries.push({ type: group.type, item: item }); });
     });
@@ -529,10 +629,11 @@
     var typeOptions = filterOption('all', '전체 글', teacherPostFilters.type) +
       filterOption('announcement', '공지', teacherPostFilters.type) +
       filterOption('assignment', '과제', teacherPostFilters.type) +
-      filterOption('board', '보드', teacherPostFilters.type);
+      filterOption('board', '보드', teacherPostFilters.type) +
+      filterOption('idea', '아이디어 구름', teacherPostFilters.type);
     var categoryOptions = filterOption('all', '전체 카테고리', teacherPostFilters.category) +
       categories.map(function (category) { return filterOption(category, category, teacherPostFilters.category); }).join('');
-    var head = '<div class="content-head"><div><h2>글 목록</h2><p>공지·과제·보드를 블로그처럼 한곳에서 찾아보세요.</p></div>' +
+    var head = '<div class="content-head"><div><h2>글 목록</h2><p>공지·과제·보드·아이디어 구름을 한곳에서 찾아보세요.</p></div>' +
       '<span class="post-result-count">' + filtered.length + '개</span></div>' +
       '<div class="post-filter-bar"><label><span>글 종류</span><select data-post-type-filter>' + typeOptions + '</select></label>' +
         '<label><span>카테고리</span><select data-post-category-filter>' + categoryOptions + '</select></label></div>';
@@ -585,6 +686,11 @@
         (item.status === 'open' ? '작성 가능' : '읽기 전용') + '</span>';
       meta.push('게시 ' + (item.postCount || 0) + '/' + classData.students.length + '명');
     }
+    if (type === 'idea') {
+      badge = '<span class="status-badge ' + (item.status === 'open' ? 'open' : '') + '">' +
+        (item.status === 'open' ? '의견 작성 가능' : '마감') + '</span>';
+      meta.push('의견 ' + (item.responseCount || 0) + '개');
+    }
     return '<article class="item-card content-clickable ' + (item.pinned ? 'pinned' : '') + '" tabindex="0" ' +
       'data-view-content="' + UI.attr(type) + '" data-content-id="' + UI.attr(item.id) + '" ' +
       'aria-label="' + UI.attr(item.title + ' 상세 보기') + '">' +
@@ -593,6 +699,7 @@
         '<div class="card-actions">' +
           (type === 'assignment' ? '<button class="button ghost small" type="button" data-view-submissions="' + UI.attr(item.id) + '">제출 보기</button>' : '') +
           (type === 'board' ? '<button class="button ghost small" type="button" data-open-board="' + UI.attr(item.id) + '">보드 보기</button>' : '') +
+          (type === 'idea' ? '<button class="button ghost small" type="button" data-open-idea="' + UI.attr(item.id) + '">의견 보기</button>' : '') +
           '<button class="button ghost small" type="button" data-edit-content="' + type + '" data-content-id="' + UI.attr(item.id) + '">수정</button>' +
           '<button class="text-link" type="button" data-delete-content="' + type + '" data-content-id="' + UI.attr(item.id) + '">삭제</button>' +
         '</div></div>' +
@@ -604,7 +711,8 @@
   function contentListFor(type) {
     if (type === 'announcement') return classData.announcements;
     if (type === 'assignment') return classData.assignments;
-    return classData.boards;
+    if (type === 'board') return classData.boards;
+    return classData.ideas || [];
   }
 
   function openTeacherContentDetail(type, item, classId, container, tab) {
@@ -621,6 +729,11 @@
       if (item.dueAt) meta.push('마감 ' + UI.date(item.dueAt, true));
       meta.push('제출 ' + (item.submissionCount || 0) + '/' + classData.students.length + '명');
     }
+    if (type === 'idea') {
+      badge = '<span class="status-badge ' + (item.status === 'open' ? 'open' : '') + '">' +
+        (item.status === 'open' ? '의견 작성 가능' : '마감') + '</span>';
+      meta.push('의견 ' + (item.responseCount || 0) + '개');
+    }
     var dialog = UI.modal({
       title: item.title,
       wide: true,
@@ -632,6 +745,7 @@
         UI.attachments(item.attachments, 'teacher') +
         '<div class="modal-actions compact-actions">' +
           (type === 'assignment' ? '<button class="button secondary small" type="button" data-detail-submissions>제출 보기</button>' : '') +
+          (type === 'idea' ? '<button class="button secondary small" type="button" data-detail-ideas>의견 보기</button>' : '') +
           '<button class="button ghost small" type="button" data-detail-edit>' + UI.escape(info.plural) + ' 수정</button>' +
         '</div>'
     });
@@ -639,6 +753,10 @@
     var submissions = dialog.querySelector('[data-detail-submissions]');
     if (submissions) submissions.addEventListener('click', function () {
       openSubmissions(item.id, classId, container, tab);
+    });
+    var ideas = dialog.querySelector('[data-detail-ideas]');
+    if (ideas) ideas.addEventListener('click', function () {
+      openTeacherIdea(item.id, classId, container, tab);
     });
     dialog.querySelector('[data-detail-edit]').addEventListener('click', function () {
       openContentEditor(type, item, classId, container, tab);
@@ -682,6 +800,7 @@
         var item = contentListFor(type).find(function (entry) { return entry.id === card.dataset.contentId; });
         if (!item) return;
         if (type === 'board') openTeacherBoard(item.id, classId, container, tab);
+        else if (type === 'idea') openTeacherIdea(item.id, classId, container, tab);
         else openTeacherContentDetail(type, item, classId, container, tab);
       }
       card.addEventListener('click', openCard);
@@ -715,6 +834,9 @@
     container.querySelectorAll('[data-open-board]').forEach(function (button) {
       button.addEventListener('click', function () { openTeacherBoard(button.dataset.openBoard, classId, container, tab); });
     });
+    container.querySelectorAll('[data-open-idea]').forEach(function (button) {
+      button.addEventListener('click', function () { openTeacherIdea(button.dataset.openIdea, classId, container, tab); });
+    });
     container.querySelectorAll('[data-add-students]').forEach(function (button) {
       button.addEventListener('click', function () { openStudentCreator(classId, container, tab); });
     });
@@ -741,8 +863,10 @@
       extra = '<div class="form-row">' +
         (type === 'assignment' ? '<div class="field"><label for="content-due">제출 마감</label><input id="content-due" name="dueAt" type="datetime-local" value="' + UI.attr(UI.localDateTime(value.dueAt)) + '"></div>' : '') +
         '<div class="field"><label for="content-status">상태</label><select id="content-status" name="status">' +
-          '<option value="open" ' + (value.status !== 'closed' ? 'selected' : '') + '>' + (type === 'board' ? '작성 가능' : '제출 가능') + '</option>' +
-          '<option value="closed" ' + (value.status === 'closed' ? 'selected' : '') + '>' + (type === 'board' ? '읽기 전용' : '마감') + '</option></select></div>' +
+          '<option value="open" ' + (value.status !== 'closed' ? 'selected' : '') + '>' +
+            (type === 'board' ? '작성 가능' : (type === 'idea' ? '의견 작성 가능' : '제출 가능')) + '</option>' +
+          '<option value="closed" ' + (value.status === 'closed' ? 'selected' : '') + '>' +
+            (type === 'board' ? '읽기 전용' : '마감') + '</option></select></div>' +
       '</div>';
     }
     return '<div class="field"><label for="content-title">제목</label><input id="content-title" name="title" required maxlength="100" value="' + UI.attr(value.title || '') + '"></div>' +
@@ -782,7 +906,7 @@
         data.dueAt = values.get('dueAt') ? new Date(values.get('dueAt')).toISOString() : '';
         data.status = values.get('status') || 'open';
       }
-      if (type === 'board') data.status = values.get('status') || 'open';
+      if (type === 'board' || type === 'idea') data.status = values.get('status') || 'open';
       UI.busy(button, true, '파일 저장 중…');
       try {
         var files = await window.LearnFiles.toPayload(picker.files());
@@ -1025,7 +1149,7 @@
   async function deleteStudent(studentId, studentLabel, classId, container, tab) {
     var yes = await UI.confirm({
       title: studentLabel + ' 삭제',
-      message: '학생 계정과 이 학생의 제출물·보드 글이 함께 삭제됩니다.',
+      message: '학생 계정과 이 학생의 제출물·보드 글·아이디어 구름 의견이 함께 삭제됩니다.',
       confirmText: '학생 삭제',
       danger: true
     });
@@ -1037,6 +1161,91 @@
     } catch (error) {
       UI.toast(error.message, 'error');
     }
+  }
+
+  function openTeacherIdea(ideaId, classId, container, tab) {
+    var idea = (classData.ideas || []).find(function (item) { return item.id === ideaId; });
+    if (!idea) return;
+    var dialog = UI.modal({ title: idea.title, wide: true, closeOnBackdrop: false, html: '' });
+    teacherIdeaModalState = { dialog: dialog, ideaId: ideaId, revealAuthors: false, grouped: false };
+    paintTeacherIdeaModal(teacherIdeaModalState, classId, container, tab);
+  }
+
+  function ideaGroupOrder(name) {
+    var match = String(name || '').match(/^(\d+)모둠$/);
+    return match ? Number(match[1]) : 99;
+  }
+
+  function ideaResponseCard(post, index, revealAuthors) {
+    var author = revealAuthors ? post.studentNumber + '번 ' + post.studentName : '익명 의견 ' + (index + 1);
+    return '<article class="idea-response-card">' +
+      '<div class="idea-response-head"><div><strong>' + UI.escape(author) + '</strong>' +
+        (post.groupName ? '<span class="idea-group-badge">' + UI.escape(post.groupName) + '</span>' : '<span class="idea-group-badge individual">개별</span>') +
+      '</div><button class="text-link" type="button" data-delete-idea-post="' + UI.attr(post.id) + '">삭제</button></div>' +
+      '<p>' + UI.nl2br(post.text) + '</p><small>' + UI.escape(UI.date(post.updatedAt || post.createdAt, true)) +
+        (post.updatedAt !== post.createdAt ? ' · 수정됨' : '') + '</small></article>';
+  }
+
+  function teacherIdeaFeed(posts, state) {
+    if (!posts.length) return UI.empty('아직 등록된 의견이 없어요', '학생들이 의견을 작성하면 이곳에 익명으로 표시됩니다.');
+    if (!state.grouped) {
+      return '<div class="idea-feed">' + posts.map(function (post, index) {
+        return ideaResponseCard(post, index, state.revealAuthors);
+      }).join('') + '</div>';
+    }
+    var names = Array.from(new Set(posts.map(function (post) { return post.groupName || '개별 의견'; }))).sort(function (a, b) {
+      return ideaGroupOrder(a) - ideaGroupOrder(b) || a.localeCompare(b, 'ko');
+    });
+    return '<div class="idea-group-list">' + names.map(function (name) {
+      var groupedPosts = posts.filter(function (post) { return (post.groupName || '개별 의견') === name; });
+      return '<section class="idea-group-section"><h3>' + UI.escape(name) + '<span>' + groupedPosts.length + '개</span></h3>' +
+        '<div class="idea-feed">' + groupedPosts.map(function (post) {
+          return ideaResponseCard(post, posts.indexOf(post), state.revealAuthors);
+        }).join('') + '</div></section>';
+    }).join('') + '</div>';
+  }
+
+  function paintTeacherIdeaModal(state, classId, container, tab) {
+    var idea = (classData.ideas || []).find(function (item) { return item.id === state.ideaId; });
+    if (!idea || !state.dialog || !state.dialog.isConnected) return;
+    var posts = (classData.ideaPosts || []).filter(function (post) { return post.ideaId === idea.id; });
+    var body = state.dialog.querySelector('.modal-body');
+    body.innerHTML =
+      '<div class="detail-meta">' + categoryBadge(idea) + '<span class="status-badge ' + (idea.status === 'open' ? 'open' : '') + '">' +
+        (idea.status === 'open' ? '의견 작성 가능' : '마감') + '</span><span>의견 ' + posts.length + '개</span></div>' +
+      '<div class="detail-body">' + (idea.body ? UI.nl2br(idea.body) : '<span class="muted-text">안내 내용이 없어요.</span>') + '</div>' +
+      UI.attachments(idea.attachments, 'teacher') +
+      '<div class="idea-view-toolbar"><div class="sort-choice" role="group" aria-label="작성자 표시">' +
+        '<button class="sort-choice-button ' + (!state.revealAuthors ? 'active' : '') + '" type="button" data-idea-anonymous>익명 보기</button>' +
+        '<button class="sort-choice-button ' + (state.revealAuthors ? 'active' : '') + '" type="button" data-idea-authors>작성자 보기</button></div>' +
+        '<div class="sort-choice" role="group" aria-label="의견 정렬"><button class="sort-choice-button ' + (!state.grouped ? 'active' : '') + '" type="button" data-idea-chronological>작성 순서</button>' +
+        '<button class="sort-choice-button ' + (state.grouped ? 'active' : '') + '" type="button" data-idea-grouped>모둠별</button></div></div>' +
+      '<div class="idea-privacy-note">학생 화면에서는 이름과 출석번호가 항상 공개되지 않습니다.</div>' +
+      teacherIdeaFeed(posts, state) +
+      '<div class="modal-actions"><button class="button ghost small" type="button" data-edit-idea>아이디어 구름 수정</button></div>';
+    UI.bindFiles(state.dialog, 'teacher');
+    body.querySelector('[data-idea-anonymous]').addEventListener('click', function () { state.revealAuthors = false; paintTeacherIdeaModal(state, classId, container, tab); });
+    body.querySelector('[data-idea-authors]').addEventListener('click', function () { state.revealAuthors = true; paintTeacherIdeaModal(state, classId, container, tab); });
+    body.querySelector('[data-idea-chronological]').addEventListener('click', function () { state.grouped = false; paintTeacherIdeaModal(state, classId, container, tab); });
+    body.querySelector('[data-idea-grouped]').addEventListener('click', function () { state.grouped = true; paintTeacherIdeaModal(state, classId, container, tab); });
+    body.querySelector('[data-edit-idea]').addEventListener('click', function () { openContentEditor('idea', idea, classId, container, tab); });
+    body.querySelectorAll('[data-delete-idea-post]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var yes = await UI.confirm({ title: '익명 의견 삭제', message: '선택한 의견을 삭제할까요?', confirmText: '삭제', danger: true });
+        if (!yes) return;
+        try {
+          await API.request('deleteIdeaPost', { postId: button.dataset.deleteIdeaPost }, 'teacher');
+          classData.ideaPosts = (classData.ideaPosts || []).filter(function (post) { return post.id !== button.dataset.deleteIdeaPost; });
+          idea.responseCount = Math.max(0, Number(idea.responseCount || 0) - 1);
+          paintClass(container, classId, tab);
+          openTeacherIdea(idea.id, classId, container, tab);
+          teacherIdeaModalState.revealAuthors = state.revealAuthors;
+          teacherIdeaModalState.grouped = state.grouped;
+          paintTeacherIdeaModal(teacherIdeaModalState, classId, container, tab);
+          UI.toast('의견을 삭제했습니다.');
+        } catch (error) { UI.toast(error.message, 'error'); }
+      });
+    });
   }
 
   function openSubmissions(assignmentId, classId, container, tab) {
@@ -1373,7 +1582,8 @@
       if (presenceBusy) return;
       presenceBusy = true;
       API.request('heartbeat', { classId: classId }, 'teacher', 1).then(function (response) {
-        if (classData && response && Number(response.version) !== Number(classData.classInfo.version)) {
+        if (classData && response && response.version != null &&
+            Number(response.version) !== Number(classData.classInfo.version)) {
           return refreshClassSilently(classId);
         }
         var list = document.querySelector('[data-presence-list]');
@@ -1398,6 +1608,8 @@
     presenceTimer = null;
     presenceVisibilityHandler = null;
     presenceBusy = false;
+    if (countdownTimer) window.clearInterval(countdownTimer);
+    countdownTimer = null;
   }
 
   window.addEventListener('learn:drive-archived', function () {
