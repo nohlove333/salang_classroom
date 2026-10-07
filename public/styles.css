@@ -2387,22 +2387,67 @@ video {
 
 /* 수업 활동 타이머 */
 .class-timer {
-  display: flex;
+  --timer-progress: 1;
+  --timer-angle: 360deg;
+  position: relative;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   margin: -4px 0 18px;
-  padding: 15px 18px;
+  padding: 14px 18px 18px;
   border: 1px solid rgba(134, 157, 193, 0.22);
   border-radius: 19px;
   background: linear-gradient(115deg, rgba(240, 247, 255, 0.86), rgba(248, 241, 252, 0.82));
   box-shadow: 0 12px 30px rgba(74, 91, 119, 0.07);
   backdrop-filter: blur(16px);
+  overflow: hidden;
 }
 
-.class-timer > div:first-child {
+.timer-copy {
   display: grid;
   gap: 2px;
-  margin-right: auto;
+  min-width: 0;
+}
+
+.timer-copy strong {
+  overflow: hidden;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timer-copy small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.timer-orbit {
+  position: relative;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#829fc8 var(--timer-angle), rgba(130, 159, 200, 0.16) 0);
+  box-shadow: 0 7px 18px rgba(77, 101, 139, 0.12);
+}
+
+.timer-orbit::after {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.84);
+  content: '';
+}
+
+.timer-orbit span {
+  position: relative;
+  z-index: 1;
+  font-size: 1.15rem;
 }
 
 .timer-kicker {
@@ -2421,12 +2466,39 @@ video {
   text-align: center;
 }
 
+.timer-flow {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 4px;
+  background: rgba(130, 159, 200, 0.12);
+}
+
+.timer-flow i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9bb8dc, #cda9ca);
+  box-shadow: 0 0 12px rgba(142, 168, 205, 0.44);
+  transform: scaleX(var(--timer-progress));
+  transform-origin: left center;
+}
+
 .class-timer.ended {
   border-color: rgba(206, 118, 139, 0.26);
   background: rgba(255, 239, 243, 0.8);
 }
 
 .class-timer.ended > b { color: #a2455c; font-size: 1.08rem; }
+
+.class-timer.ended .timer-orbit {
+  background: rgba(206, 118, 139, 0.14);
+  box-shadow: none;
+}
+
+.class-timer.ended .timer-flow i { background: #ce768b; }
 
 .timer-quick-buttons {
   display: flex;
@@ -2451,8 +2523,15 @@ video {
   .idea-view-toolbar { align-items: stretch; flex-direction: column; }
   .idea-view-toolbar .sort-choice { width: 100%; }
   .idea-view-toolbar .sort-choice-button { flex: 1; }
-  .class-timer { flex-wrap: wrap; }
-  .class-timer > b { min-width: 104px; }
+  .class-timer {
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 10px 12px;
+    padding: 13px 14px 17px;
+  }
+  .timer-orbit { width: 46px; height: 46px; }
+  .timer-orbit::after { width: 34px; height: 34px; }
+  .class-timer > b { min-width: 88px; font-size: 1.45rem; }
+  .class-timer > .button { grid-column: 2 / 4; justify-self: end; }
 }
 
 @media (prefers-reduced-motion: reduce) {

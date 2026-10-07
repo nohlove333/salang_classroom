@@ -470,34 +470,54 @@
 
   function timerBanner(timer, teacher) {
     if (!timer) return '';
-    return '<section class="class-timer" aria-live="polite">' +
-      '<div><span class="timer-kicker">ACTIVITY TIMER</span><strong>' + UI.escape(timer.title || '활동 시간') + '</strong></div>' +
-      '<b data-timer-countdown data-timer-ends="' + UI.attr(timer.endsAt || '') + '">--:--</b>' +
+    return '<section class="class-timer timer-widget" data-timer-widget data-timer-starts="' + UI.attr(timer.startedAt || '') +
+      '" data-timer-ends="' + UI.attr(timer.endsAt || '') + '" aria-live="polite">' +
+      '<div class="timer-orbit" aria-hidden="true"><span>⏱</span></div>' +
+      '<div class="timer-copy"><span class="timer-kicker">ACTIVITY TIMER</span><strong>' + UI.escape(timer.title || '활동 시간') +
+        '</strong><small data-timer-caption>남은 활동 시간</small></div>' +
+      '<b data-timer-countdown>--:--</b>' +
       (teacher ? '<button class="button ghost small" type="button" data-clear-timer>종료</button>' : '') +
+      '<span class="timer-flow" aria-hidden="true"><i></i></span>' +
     '</section>';
   }
 
-  function countdownText(endsAt) {
-    var seconds = Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 1000));
+  function countdownText(startsAt, endsAt) {
+    var now = Date.now();
+    var start = new Date(startsAt).getTime();
+    var end = new Date(endsAt).getTime();
+    var remaining = Math.max(0, end - now);
+    var total = Math.max(1, end - start);
+    var seconds = Math.ceil(remaining / 1000);
     var hours = Math.floor(seconds / 3600);
     var minutes = Math.floor((seconds % 3600) / 60);
     var remainder = seconds % 60;
     var clock = String(minutes).padStart(2, '0') + ':' + String(remainder).padStart(2, '0');
     if (hours) clock = hours + ':' + clock;
-    return { text: seconds ? clock : '시간 종료', ended: !seconds };
+    return {
+      text: seconds ? clock : '시간 종료',
+      ended: !seconds,
+      progress: Number.isFinite(total) && Number.isFinite(remaining) ? Math.max(0, Math.min(1, remaining / total)) : 0
+    };
   }
 
   function startCountdownTicker() {
-    if (countdownTimer) window.clearInterval(countdownTimer);
+    if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     function tick() {
-      document.querySelectorAll('[data-timer-countdown]').forEach(function (node) {
-        var value = countdownText(node.dataset.timerEnds);
-        node.textContent = value.text;
-        node.closest('.class-timer').classList.toggle('ended', value.ended);
+      var running = false;
+      document.querySelectorAll('[data-timer-widget]').forEach(function (widget) {
+        var node = widget.querySelector('[data-timer-countdown]');
+        var value = countdownText(widget.dataset.timerStarts, widget.dataset.timerEnds);
+        if (node && node.textContent !== value.text) node.textContent = value.text;
+        widget.style.setProperty('--timer-progress', value.progress.toFixed(5));
+        widget.style.setProperty('--timer-angle', (value.progress * 360).toFixed(2) + 'deg');
+        widget.classList.toggle('ended', value.ended);
+        var caption = widget.querySelector('[data-timer-caption]');
+        if (caption) caption.textContent = value.ended ? '활동 시간이 끝났어요' : '남은 활동 시간';
+        if (!value.ended) running = true;
       });
+      countdownTimer = running ? window.requestAnimationFrame(tick) : null;
     }
     tick();
-    countdownTimer = window.setInterval(tick, 1000);
   }
 
   function openTimerEditor(classId, container, tab) {
@@ -1089,7 +1109,7 @@
     }
     var classInfo = classData.classInfo;
     var accessUrl = studentAccessUrl();
-    var qrUrl = new URL('./student-login-qr.svg?v=37', window.location.href).toString();
+    var qrUrl = new URL('./student-login-qr.svg?v=38', window.location.href).toString();
     var slips = students.map(function (student) {
       return '<section class="slip"><div class="slip-brand">사랑스런(Learn) 수업시간</div>' +
         '<h2>' + UI.escape(classInfo.name) + '</h2>' +
@@ -1625,7 +1645,7 @@
     presenceTimer = null;
     presenceVisibilityHandler = null;
     presenceBusy = false;
-    if (countdownTimer) window.clearInterval(countdownTimer);
+    if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
   }
 

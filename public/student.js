@@ -147,27 +147,42 @@
 
   function timerBanner(timer) {
     if (!timer) return '';
-    return '<section class="class-timer student-timer" aria-live="polite"><div><span class="timer-kicker">ACTIVITY TIMER</span><strong>' +
-      UI.escape(timer.title || '활동 시간') + '</strong></div><b data-timer-countdown data-timer-ends="' +
-      UI.attr(timer.endsAt || '') + '">--:--</b></section>';
+    return '<section class="class-timer timer-widget student-timer" data-timer-widget data-timer-starts="' +
+      UI.attr(timer.startedAt || '') + '" data-timer-ends="' + UI.attr(timer.endsAt || '') + '" aria-live="polite">' +
+      '<div class="timer-orbit" aria-hidden="true"><span>⏱</span></div>' +
+      '<div class="timer-copy"><span class="timer-kicker">ACTIVITY TIMER</span><strong>' + UI.escape(timer.title || '활동 시간') +
+        '</strong><small data-timer-caption>남은 활동 시간</small></div>' +
+      '<b data-timer-countdown>--:--</b><span class="timer-flow" aria-hidden="true"><i></i></span></section>';
   }
 
   function startCountdownTicker() {
-    if (countdownTimer) window.clearInterval(countdownTimer);
+    if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     function tick() {
-      document.querySelectorAll('[data-timer-countdown]').forEach(function (node) {
-        var seconds = Math.max(0, Math.ceil((new Date(node.dataset.timerEnds).getTime() - Date.now()) / 1000));
+      var running = false;
+      document.querySelectorAll('[data-timer-widget]').forEach(function (widget) {
+        var now = Date.now();
+        var start = new Date(widget.dataset.timerStarts).getTime();
+        var end = new Date(widget.dataset.timerEnds).getTime();
+        var remaining = Math.max(0, end - now);
+        var total = Math.max(1, end - start);
+        var progress = Number.isFinite(total) && Number.isFinite(remaining) ? Math.max(0, Math.min(1, remaining / total)) : 0;
+        var seconds = Math.ceil(remaining / 1000);
         var hours = Math.floor(seconds / 3600);
         var minutes = Math.floor((seconds % 3600) / 60);
         var remainder = seconds % 60;
-        node.textContent = seconds
-          ? (hours ? hours + ':' : '') + String(minutes).padStart(2, '0') + ':' + String(remainder).padStart(2, '0')
-          : '시간 종료';
-        node.closest('.class-timer').classList.toggle('ended', !seconds);
+        var text = seconds ? (hours ? hours + ':' : '') + String(minutes).padStart(2, '0') + ':' + String(remainder).padStart(2, '0') : '시간 종료';
+        var node = widget.querySelector('[data-timer-countdown]');
+        if (node && node.textContent !== text) node.textContent = text;
+        widget.style.setProperty('--timer-progress', progress.toFixed(5));
+        widget.style.setProperty('--timer-angle', (progress * 360).toFixed(2) + 'deg');
+        widget.classList.toggle('ended', !seconds);
+        var caption = widget.querySelector('[data-timer-caption]');
+        if (caption) caption.textContent = seconds ? '남은 활동 시간' : '활동 시간이 끝났어요';
+        if (seconds) running = true;
       });
+      countdownTimer = running ? window.requestAnimationFrame(tick) : null;
     }
     tick();
-    countdownTimer = window.setInterval(tick, 1000);
   }
 
   function renderTab(tab, session) {
@@ -922,7 +937,7 @@
     heartbeatTimer = null;
     heartbeatVisibilityHandler = null;
     heartbeatBusy = false;
-    if (countdownTimer) window.clearInterval(countdownTimer);
+    if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
   }
 
