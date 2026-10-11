@@ -66,6 +66,7 @@
 
   function smartHomeRoute() {
     var parts = routeParts();
+    if (parts[0] === 'guest') return location.hash || '#/';
     if (parts[0] === 'student' && hasSession('student')) return studentResumeRoute();
     if (parts[0] === 'teacher' && hasSession('teacher')) return '#/teacher';
     return resumeRoute();
@@ -79,6 +80,7 @@
   function updateHeader(parts) {
     var area = parts[0] || '';
     document.querySelectorAll('[data-role-link]').forEach(function (link) {
+      if (area === 'guest') { link.hidden = true; return; }
       var teacherArea = area === 'teacher';
       link.hidden = link.dataset.roleLink === 'teacher' ? !teacherArea : teacherArea;
       link.classList.toggle('active', link.dataset.roleLink === area);
@@ -90,6 +92,7 @@
   function cleanupViews() {
     if (window.TeacherViews) window.TeacherViews.stop();
     if (window.StudentViews) window.StudentViews.stop();
+    if (window.GuestViews) window.GuestViews.stop();
     UI.closeModal();
   }
 
@@ -107,12 +110,16 @@
       renderTeacherAuth(true);
     } else if (parts[0] === 'teacher' && parts[1] === 'class' && parts[2]) {
       window.TeacherViews.classPage(app, parts[2], parts[3] || 'announcements');
+    } else if (parts[0] === 'teacher' && parts[1] === 'quick' && parts[2]) {
+      window.TeacherViews.guestRoomPage(app, parts[2], parts[3] || 'opinion');
     } else if (parts[0] === 'teacher' && parts.length === 1) {
       window.TeacherViews.dashboard(app);
     } else if (parts[0] === 'student' && parts[1] === 'login') {
       renderStudentLogin();
     } else if (parts[0] === 'student' && parts[1] === 'class') {
       window.StudentViews.classPage(app, parts[2] || 'announcements');
+    } else if (parts[0] === 'guest' && parts[1]) {
+      window.GuestViews.room(app, parts[1], parts[2] || 'opinion');
     } else {
       renderNotFound();
     }
@@ -289,6 +296,12 @@
   };
   window.addEventListener('learn:session-expired', function (event) {
     var role = event.detail && event.detail.role;
+    if (role === 'guest') {
+      window.LearnSession.clear('guest');
+      UI.closeModal();
+      render();
+      return;
+    }
     if (role !== 'student' && role !== 'teacher') return;
     clearRole(role);
     UI.closeModal();

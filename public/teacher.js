@@ -18,6 +18,12 @@
   var teacherPostFilters = { type: 'all', category: 'all' };
   var countdownTimer = null;
   var teacherIdeaModalState = null;
+  var guestRoomData = null;
+  var guestRoomId = '';
+  var guestRoomContainer = null;
+  var guestRoomTab = 'opinion';
+  var guestRoomTimer = null;
+  var guestRoomBusy = false;
 
   function classSortMode() {
     try {
@@ -84,6 +90,7 @@
               '<p>클래스를 열어 공지, 과제, 보드, 아이디어 구름과 학생을 관리하세요.</p></div>' +
             '<div class="dashboard-tools">' +
               '<button class="button secondary" type="button" data-logout>로그아웃</button>' +
+              '<button class="button secondary" type="button" data-create-guest-room>＋ 1회성 참여방</button>' +
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
             '</div>' +
           '</div>' +
@@ -92,14 +99,18 @@
             summaryCell('클래스', data.totals.classes) +
             summaryCell('등록 학생', data.totals.students) +
             summaryCell('진행 과제', data.totals.assignments) +
-            summaryCell('열린 보드', data.totals.boards) +
+            summaryCell('활성 참여방', data.totals.guestRooms || 0) +
           '</div>' +
+          renderGuestRoomCollection(data.guestRooms || []) +
           (data.classes.length
             ? classSortToolbar(sortMode) + renderClassCollection(data.classes, sortMode)
             : '<div class="panel">' + UI.empty('첫 클래스를 만들어 보세요', '클래스 코드와 이름을 정하면 바로 학생을 등록할 수 있어요.', '<button class="button" type="button" data-create-class>클래스 만들기</button>') + '</div>') +
         '</section>';
     container.querySelectorAll('[data-create-class]').forEach(function (button) {
         button.addEventListener('click', function () { openClassEditor(container); });
+      });
+      container.querySelectorAll('[data-create-guest-room]').forEach(function (button) {
+        button.addEventListener('click', function () { openGuestRoomEditor(container); });
       });
       container.querySelector('[data-logout]').addEventListener('click', function () {
         dashboardData = null;
@@ -127,6 +138,7 @@
           deleteClass(button.dataset.deleteClass, button.dataset.className, button.dataset.classCode, container);
         });
       });
+      bindDashboardGuestRooms(container);
       container.querySelectorAll('[data-class-sort]').forEach(function (button) {
         button.addEventListener('click', function () {
           saveClassSortMode(button.dataset.classSort);
@@ -144,6 +156,119 @@
   function summaryCell(label, number) {
     return '<div class="summary-cell"><span>' + UI.escape(label) + '</span><strong>' +
       UI.escape(number || 0) + '</strong></div>';
+  }
+
+  function guestRoomStatusLabel(room) {
+    if (room.status === 'expired') return '종료됨';
+    if (room.status === 'closed') return '닫힘';
+    return '진행 중';
+  }
+
+  function guestRoomUrl(code) {
+    return location.origin + location.pathname.replace(/[^/]*$/, '') + '#/guest/' + encodeURIComponent(code) + '/opinion';
+  }
+
+  function renderGuestRoomCollection(rooms) {
+    return '<section class="quick-room-section">' +
+      '<div class="quick-room-section-head"><div><p class="section-kicker">One-time room</p><h2>1회성 참여방</h2>' +
+        '<p>강의 현장에서 QR 하나로 익명 의견, 파일 보드, 아이디어 구름을 열어요.</p></div>' +
+        '<button class="button secondary" type="button" data-create-guest-room>＋ 새 참여방</button></div>' +
+      (rooms.length ? '<div class="quick-room-grid">' + rooms.map(function (room) {
+        return '<article class="quick-room-card ' + UI.attr(room.status) + '">' +
+          '<div class="quick-room-card-top"><span class="status-pill ' + UI.attr(room.status) + '">' + UI.escape(guestRoomStatusLabel(room)) + '</span>' +
+            '<span>' + UI.escape(UI.date(room.expiresAt, true)) + '까지</span></div>' +
+          '<h3>' + UI.escape(room.title) + '</h3><p>로그인 없이 QR로 바로 참여</p>' +
+          '<div class="quick-room-actions">' +
+            '<button class="button small" type="button" data-open-guest-room="' + UI.attr(room.id) + '">관리</button>' +
+            '<button class="button small secondary" type="button" data-guest-room-qr="' + UI.attr(room.code) + '" data-room-title="' + UI.attr(room.title) + '">QR</button>' +
+            '<button class="text-link danger" type="button" data-delete-guest-room="' + UI.attr(room.id) + '" data-room-title="' + UI.attr(room.title) + '">삭제</button>' +
+          '</div></article>';
+      }).join('') + '</div>' : '<div class="quick-room-empty"><strong>아직 만든 참여방이 없어요.</strong><span>강의 시작 전에 제목과 이용 시간을 정해 QR을 띄워 보세요.</span></div>') +
+    '</section>';
+  }
+
+  function bindDashboardGuestRooms(container) {
+    container.querySelectorAll('[data-open-guest-room]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        location.hash = '#/teacher/quick/' + button.dataset.openGuestRoom + '/opinion';
+      });
+    });
+    container.querySelectorAll('[data-guest-room-qr]').forEach(function (button) {
+      button.addEventListener('click', function () { openGuestRoomQr(button.dataset.guestRoomQr, button.dataset.roomTitle); });
+    });
+    container.querySelectorAll('[data-delete-guest-room]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var confirmed = await UI.confirm({
+          title: button.dataset.roomTitle + ' 삭제',
+          message: '참여방의 의견과 파일이 모두 삭제됩니다.',
+          confirmText: '참여방 삭제', danger: true
+        });
+        if (confirmed == null) return;
+        try {
+          await API.request('deleteGuestRoom', { roomId: button.dataset.deleteGuestRoom }, 'teacher');
+          UI.toast('1회성 참여방을 삭제했습니다.');
+          renderDashboard(container, true);
+        } catch (error) { UI.toast(error.message, 'error'); }
+      });
+    });
+  }
+
+  function openGuestRoomEditor(container) {
+    var dialog = UI.modal({
+      title: '1회성 참여방 만들기',
+      html: '<form class="form-stack" data-guest-room-form>' +
+        '<div class="field"><label for="guest-room-title">참여방 이름</label><input id="guest-room-title" name="title" required maxlength="60" placeholder="예: 오늘의 민주시민 강의"></div>' +
+        '<div class="field"><label for="guest-room-duration">이용 시간</label><select id="guest-room-duration" name="duration">' +
+          '<option value="2">2시간</option><option value="6">6시간</option><option value="12">12시간</option>' +
+          '<option value="24" selected>24시간</option><option value="72">3일</option><option value="168">7일</option></select>' +
+          '<span class="field-help">시간이 지나면 새 글과 파일을 더 올릴 수 없어요.</span></div>' +
+        '<div class="info-box">참여자는 QR만 찍으면 이름·학번·비밀번호 없이 익명으로 바로 들어옵니다.</div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-close-modal>취소</button><button class="button" type="submit">참여방 만들기</button></div>' +
+      '</form>'
+    });
+    dialog.querySelector('[data-close-modal]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-guest-room-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var values = new FormData(form);
+      var submit = form.querySelector('[type="submit"]');
+      UI.busy(submit, true, '만드는 중…');
+      try {
+        var room = await API.request('createGuestRoom', {
+          title: String(values.get('title') || '').trim(), durationHours: Number(values.get('duration') || 24)
+        }, 'teacher');
+        UI.closeModal();
+        dashboardData = null;
+        renderDashboard(container, true);
+        openGuestRoomQr(room.code, room.title, function () {
+          location.hash = '#/teacher/quick/' + room.id + '/opinion';
+        });
+      } catch (error) { UI.toast(error.message, 'error'); UI.busy(submit, false); }
+    });
+  }
+
+  function copyText(value, success) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(value).then(function () { UI.toast(success || '복사했습니다.'); });
+    }
+    var input = document.createElement('textarea'); input.value = value; document.body.appendChild(input); input.select();
+    document.execCommand('copy'); input.remove(); UI.toast(success || '복사했습니다.'); return Promise.resolve();
+  }
+
+  function openGuestRoomQr(code, title, afterClose) {
+    var url = guestRoomUrl(code);
+    var dialog = UI.modal({
+      title: title || '1회성 참여방 QR',
+      html: '<div class="guest-qr-wrap"><img src="./guest-room-qr.svg?code=' + encodeURIComponent(code) + '" alt="참여방 QR 코드">' +
+        '<strong>카메라로 찍으면 바로 익명 참여</strong><p>' + UI.escape(url) + '</p></div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-copy-room-link>링크 복사</button>' +
+          (navigator.share ? '<button class="button secondary" type="button" data-share-room>공유</button>' : '') +
+          '<button class="button" type="button" data-close-room-qr>완료</button></div>'
+    });
+    dialog.querySelector('[data-copy-room-link]').addEventListener('click', function () { copyText(url, '참여 링크를 복사했습니다.'); });
+    var share = dialog.querySelector('[data-share-room]');
+    if (share) share.addEventListener('click', function () { navigator.share({ title: title, text: 'QR 참여방에 들어오세요.', url: url }).catch(function () {}); });
+    dialog.querySelector('[data-close-room-qr]').addEventListener('click', function () { UI.closeModal(); if (afterClose) afterClose(); });
   }
 
   function storageStatusHtml(storage) {
@@ -1639,6 +1764,114 @@
     document.addEventListener('visibilitychange', presenceVisibilityHandler);
   }
 
+  async function renderGuestRoom(container, roomId, tab, forceRefresh) {
+    if (!sessionOrLogin()) return;
+    stopPresence();
+    guestRoomContainer = container;
+    guestRoomTab = ['opinion', 'board', 'cloud'].indexOf(tab) >= 0 ? tab : 'opinion';
+    if (!forceRefresh && guestRoomData && guestRoomId === String(roomId)) {
+      paintGuestRoom(container, roomId, guestRoomTab);
+      startGuestRoomSync(roomId);
+      return;
+    }
+    loading(container, '1회성 참여방을 불러오고 있어요.');
+    try {
+      guestRoomData = await API.request('getTeacherGuestRoom', { roomId: roomId }, 'teacher');
+      guestRoomId = String(roomId);
+      paintGuestRoom(container, roomId, guestRoomTab);
+      startGuestRoomSync(roomId);
+    } catch (error) {
+      errorScreen(container, error, function () { renderGuestRoom(container, roomId, guestRoomTab, true); });
+    }
+  }
+
+  function guestTabButton(roomId, value, label, count) {
+    return '<a class="tab-button ' + (guestRoomTab === value ? 'active' : '') + '" href="#/teacher/quick/' + UI.attr(roomId) + '/' + value + '">' +
+      UI.escape(label) + '<span>' + UI.escape(count || 0) + '</span></a>';
+  }
+
+  function teacherGuestPostCard(post) {
+    return '<article class="guest-feed-card">' +
+      '<div class="guest-feed-meta"><span>익명 참여자</span><time>' + UI.escape(UI.date(post.updatedAt, true)) + '</time></div>' +
+      (post.text ? '<p>' + UI.nl2br(post.text) + '</p>' : '') +
+      UI.attachmentGallery(post.attachments || [], 'teacher', { maxItems: 6, allowDownload: true }) +
+      '<div class="guest-feed-actions"><button class="text-link danger" type="button" data-delete-guest-post="' + UI.attr(post.id) + '">삭제</button></div>' +
+    '</article>';
+  }
+
+  function teacherWordCloud(posts) {
+    if (!posts.length) return UI.empty('아직 단어가 없어요', '참여자 화면에서 아이디어를 올리면 이곳에 모여요.');
+    var counts = {};
+    posts.forEach(function (post) { var key = String(post.text || '').trim(); if (key) counts[key] = (counts[key] || 0) + 1; });
+    var max = Math.max.apply(Math, Object.keys(counts).map(function (key) { return counts[key]; }));
+    return '<div class="guest-word-cloud">' + Object.keys(counts).map(function (word, index) {
+      var size = 1 + (counts[word] / max) * 1.8;
+      return '<span class="tone-' + (index % 5) + '" style="font-size:' + size.toFixed(2) + 'rem">' + UI.escape(word) +
+        (counts[word] > 1 ? '<small>×' + counts[word] + '</small>' : '') + '</span>';
+    }).join('') + '</div><div class="guest-word-list">' + posts.map(function (post) {
+      return '<button class="word-delete-chip" type="button" data-delete-guest-post="' + UI.attr(post.id) + '">' + UI.escape(post.text) + ' <b>×</b></button>';
+    }).join('') + '</div>';
+  }
+
+  function paintGuestRoom(container, roomId, tab) {
+    var room = guestRoomData.room;
+    var posts = guestRoomData.posts || [];
+    var opinions = posts.filter(function (post) { return post.kind === 'opinion'; });
+    var boards = posts.filter(function (post) { return post.kind === 'board'; });
+    var words = posts.filter(function (post) { return post.kind === 'word'; });
+    var body = tab === 'cloud' ? teacherWordCloud(words) :
+      (tab === 'board' ? boards : opinions).map(teacherGuestPostCard).join('') || UI.empty(
+        tab === 'board' ? '아직 올라온 파일이 없어요' : '아직 올라온 의견이 없어요', 'QR을 띄우고 참여자에게 첫 글을 부탁해 보세요.'
+      );
+    container.innerHTML = '<section class="app-page guest-room-page">' +
+      '<div class="workspace-head quick-room-workspace"><button class="back-button" type="button" data-room-back aria-label="목록으로">←</button>' +
+        '<div class="workspace-title"><p class="section-kicker">One-time room</p><h1>' + UI.escape(room.title) + '</h1>' +
+          '<p><span class="status-pill ' + UI.attr(room.status) + '">' + UI.escape(guestRoomStatusLabel(room)) + '</span> · ' + UI.escape(UI.date(room.expiresAt, true)) + '까지</p></div>' +
+        '<div class="workspace-actions"><button class="button secondary" type="button" data-room-qr>QR 크게 보기</button>' +
+          '<button class="button secondary" type="button" data-copy-room>링크 복사</button>' +
+          (room.status === 'open' ? '<button class="button" type="button" data-close-room>참여 마감</button>' : '') + '</div></div>' +
+      '<nav class="tab-bar guest-room-tabs" aria-label="참여방 메뉴">' + guestTabButton(roomId, 'opinion', '의견 나눔', opinions.length) +
+        guestTabButton(roomId, 'board', '파일 보드', boards.length) + guestTabButton(roomId, 'cloud', '아이디어 구름', words.length) + '</nav>' +
+      '<section class="content-panel guest-room-content"><div class="content-panel-head"><div><h2>' +
+        UI.escape(tab === 'opinion' ? '익명 의견' : tab === 'board' ? '공유 파일 보드' : '아이디어 구름') + '</h2>' +
+        '<p>내용은 자동으로 갱신됩니다. 참여자 이름은 수집하지 않아요.</p></div><button class="button secondary small" type="button" data-refresh-room>새로고침</button></div>' +
+        '<div class="guest-feed ' + UI.attr(tab) + '">' + body + '</div></section></section>';
+    container.querySelector('[data-room-back]').addEventListener('click', function () { location.hash = '#/teacher'; });
+    container.querySelector('[data-room-qr]').addEventListener('click', function () { openGuestRoomQr(room.code, room.title); });
+    container.querySelector('[data-copy-room]').addEventListener('click', function () { copyText(guestRoomUrl(room.code), '참여 링크를 복사했습니다.'); });
+    container.querySelector('[data-refresh-room]').addEventListener('click', function () { renderGuestRoom(container, roomId, tab, true); });
+    var closeButton = container.querySelector('[data-close-room]');
+    if (closeButton) closeButton.addEventListener('click', async function () {
+      var answer = await UI.confirm({ title: '참여를 마감할까요?', message: '기존 글은 계속 볼 수 있지만 새 글과 파일은 더 올릴 수 없습니다.', confirmText: '참여 마감' });
+      if (answer == null) return;
+      try { await API.request('closeGuestRoom', { roomId: roomId, status: 'closed' }, 'teacher'); renderGuestRoom(container, roomId, tab, true); }
+      catch (error) { UI.toast(error.message, 'error'); }
+    });
+    container.querySelectorAll('[data-delete-guest-post]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        try { await API.request('deleteGuestPost', { postId: button.dataset.deleteGuestPost }, 'teacher'); await refreshGuestRoomSilently(roomId); }
+        catch (error) { UI.toast(error.message, 'error'); }
+      });
+    });
+    UI.bindFiles(container, 'teacher');
+  }
+
+  async function refreshGuestRoomSilently(roomId) {
+    if (guestRoomBusy || !guestRoomContainer || !guestRoomContainer.isConnected) return;
+    guestRoomBusy = true;
+    var y = window.scrollY;
+    try {
+      guestRoomData = await API.request('getTeacherGuestRoom', { roomId: roomId }, 'teacher', 1);
+      paintGuestRoom(guestRoomContainer, roomId, guestRoomTab);
+      window.requestAnimationFrame(function () { window.scrollTo(0, y); });
+    } catch (error) {} finally { guestRoomBusy = false; }
+  }
+
+  function startGuestRoomSync(roomId) {
+    if (guestRoomTimer) window.clearInterval(guestRoomTimer);
+    guestRoomTimer = window.setInterval(function () { refreshGuestRoomSilently(roomId); }, 6000);
+  }
+
   function stopPresence() {
     if (presenceTimer) window.clearInterval(presenceTimer);
     if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
@@ -1647,6 +1880,9 @@
     presenceBusy = false;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
+    if (guestRoomTimer) window.clearInterval(guestRoomTimer);
+    guestRoomTimer = null;
+    guestRoomBusy = false;
   }
 
   window.addEventListener('learn:drive-archived', function () {
@@ -1658,6 +1894,7 @@
   window.TeacherViews = {
     dashboard: renderDashboard,
     classPage: renderClass,
+    guestRoomPage: renderGuestRoom,
     stop: stopPresence
   };
 })();

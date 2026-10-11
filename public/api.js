@@ -4,6 +4,13 @@
   var config = window.LEARN_CONFIG || {};
   var teacherSessionKey = 'learn_teacher_session_v1';
   var studentSessionKey = 'learn_student_session_v1';
+  var guestSessionKey = 'learn_guest_session_v1';
+
+  function sessionKey(role) {
+    if (role === 'teacher') return teacherSessionKey;
+    if (role === 'guest') return guestSessionKey;
+    return studentSessionKey;
+  }
 
   function ApiError(message, code, details) {
     this.name = 'ApiError';
@@ -32,7 +39,7 @@
   }
 
   function readSession(role) {
-    var key = role === 'teacher' ? teacherSessionKey : studentSessionKey;
+    var key = sessionKey(role);
     try {
       return JSON.parse(localStorage.getItem(key) || 'null');
     } catch (error) {
@@ -41,7 +48,7 @@
   }
 
   function writeSession(role, value) {
-    var key = role === 'teacher' ? teacherSessionKey : studentSessionKey;
+    var key = sessionKey(role);
     if (!value) {
       localStorage.removeItem(key);
       return;
@@ -147,7 +154,8 @@
   }
 
   async function uploadDirect(file) {
-    var role = String(location.hash || '').indexOf('#/teacher') === 0 ? 'teacher' : 'student';
+    var hash = String(location.hash || '');
+    var role = hash.indexOf('#/teacher') === 0 ? 'teacher' : (hash.indexOf('#/guest') === 0 ? 'guest' : 'student');
     var session = readSession(role);
     if (!session || !session.token) throw new ApiError('로그인이 필요합니다.', 'UNAUTHORIZED');
     var base = String(config.apiUrl || '/api').replace(/\/$/, '');
@@ -228,7 +236,7 @@
       payload: payload || {},
       token: session && session.token ? session.token : ''
     };
-    var safeToRetry = ['teacherDashboard', 'getTeacherClass', 'getStudentClass', 'getFileContent', 'heartbeat'];
+    var safeToRetry = ['teacherDashboard', 'getTeacherClass', 'getStudentClass', 'getTeacherGuestRoom', 'getGuestRoom', 'getFileContent', 'heartbeat', 'guestHeartbeat'];
     var retries = typeof retryCount === 'number' ? retryCount : (safeToRetry.indexOf(action) >= 0 ? 2 : 0);
     try {
       var response = await fetch(config.apiUrl, {

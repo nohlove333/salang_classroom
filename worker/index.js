@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-07-v38';
+const RELEASE = '2026-10-11-v39';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -124,6 +124,31 @@ CREATE TABLE IF NOT EXISTS class_timers (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS guest_rooms (
+  id TEXT PRIMARY KEY,
+  teacher_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  status TEXT NOT NULL DEFAULT 'open',
+  expires_at TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS guest_rooms_teacher_created ON guest_rooms(teacher_id, created_at);
+CREATE TABLE IF NOT EXISTS guest_posts (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL,
+  participant_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (room_id) REFERENCES guest_rooms(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS guest_posts_room_kind ON guest_posts(room_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS guest_posts_participant ON guest_posts(participant_id, updated_at);
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,
   r2_key TEXT NOT NULL UNIQUE,
@@ -189,6 +214,13 @@ function randomDigits() {
   const bytes = new Uint32Array(1);
   crypto.getRandomValues(bytes);
   return String(1000 + (bytes[0] % 9000));
+}
+
+function randomRoomCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join('');
 }
 
 function randomToken() {
@@ -303,9 +335,9 @@ async function schemaReady(env) {
     if (!row) return false;
     if (!featureSchemaVerified) {
       const featureTables = await all(env.DB.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers')"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
       ));
-      if (featureTables.length < 2) await ensureSchema(env);
+      if (featureTables.length < 4) await ensureSchema(env);
       featureSchemaVerified = true;
     }
     return true;
@@ -314,12 +346,12 @@ async function schemaReady(env) {
   }
 }
 
-async function issueSession(env, role, userId, classId = '') {
+async function issueSession(env, role, userId, classId = '', expiresAt = '') {
   const token = randomToken();
   const tokenHash = await sha256(token);
   const created = nowIso();
   const lifetime = role === 'teacher' ? 30 * 86400000 : 12 * 3600000;
-  const expires = new Date(Date.now() + lifetime).toISOString();
+  const expires = expiresAt || new Date(Date.now() + lifetime).toISOString();
   await env.DB.prepare(
     'INSERT INTO sessions(token_hash, role, user_id, class_id, expires_at, created_at) VALUES(?,?,?,?,?,?)'
   ).bind(tokenHash, role, userId, classId || '', expires, created).run();
@@ -451,6 +483,33 @@ function ideaPostJson(row, revealAuthor = false, viewerId = '') {
     item.studentName = row.student_name;
   }
   return item;
+}
+
+function guestRoomJson(row) {
+  const expired = Boolean(row && row.expires_at && row.expires_at <= nowIso());
+  return {
+    id: row.id,
+    title: row.title,
+    code: row.code,
+    status: expired && row.status === 'open' ? 'expired' : row.status,
+    expiresAt: row.expires_at,
+    version: Number(row.version || 1),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function guestPostJson(row, viewerId = '') {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    kind: row.kind,
+    text: row.text || '',
+    mine: Boolean(viewerId && row.participant_id === viewerId),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    attachments: []
+  };
 }
 
 function fileJson(row) {
@@ -688,12 +747,18 @@ async function teacherDashboard(env, session) {
     'SELECT * FROM classes WHERE teacher_id=? ORDER BY display_order, created_at'
   ).bind(session.user_id));
   const classes = rows.map(classJson);
+  const guestRows = await all(env.DB.prepare(
+    'SELECT * FROM guest_rooms WHERE teacher_id=? ORDER BY created_at DESC'
+  ).bind(session.user_id));
+  const guestRooms = guestRows.map(guestRoomJson);
   return {
     teacher,
     classes,
+    guestRooms,
     storage: await fileStorageStatus(env),
     totals: {
       classes: classes.length,
+      guestRooms: guestRooms.filter((item) => item.status === 'open').length,
       students: classes.reduce((sum, item) => sum + item.studentCount, 0),
       assignments: Number((await env.DB.prepare(
         "SELECT COUNT(*) AS total FROM contents c JOIN classes k ON k.id=c.class_id WHERE k.teacher_id=? AND c.type='assignment'"
@@ -703,6 +768,171 @@ async function teacherDashboard(env, session) {
       ).bind(session.user_id).first()).total || 0)
     }
   };
+}
+
+async function ownedGuestRoom(env, session, roomId) {
+  const row = await env.DB.prepare(
+    'SELECT * FROM guest_rooms WHERE id=? AND teacher_id=?'
+  ).bind(String(roomId || ''), session.user_id).first();
+  if (!row) throw new AppError('1회성 참여방을 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  return row;
+}
+
+async function touchGuestRoom(env, roomId) {
+  await env.DB.prepare(
+    'UPDATE guest_rooms SET version=version+1,updated_at=? WHERE id=?'
+  ).bind(nowIso(), roomId).run();
+}
+
+async function guestRoomData(env, roomRow, viewerId = '') {
+  const rows = await all(env.DB.prepare(
+    'SELECT * FROM guest_posts WHERE room_id=? ORDER BY created_at,id'
+  ).bind(roomRow.id));
+  const attachmentRows = await all(env.DB.prepare(
+    "SELECT a.owner_id,f.* FROM attachments a JOIN files f ON f.id=a.file_id JOIN guest_posts p ON p.id=a.owner_id WHERE a.owner_type='guest_post' AND p.room_id=? ORDER BY a.sort_order"
+  ).bind(roomRow.id));
+  const files = new Map();
+  for (const row of attachmentRows) {
+    if (!files.has(row.owner_id)) files.set(row.owner_id, []);
+    files.get(row.owner_id).push(fileJson(row));
+  }
+  const posts = rows.map((row) => {
+    const item = guestPostJson(row, viewerId);
+    item.attachments = files.get(row.id) || [];
+    return item;
+  });
+  return { room: guestRoomJson(roomRow), posts };
+}
+
+async function createGuestRoom(env, session, payload) {
+  const title = String(payload.title || '').trim().slice(0, 60);
+  if (!title) throw new AppError('참여방 이름을 입력해 주세요.', 'INVALID_TITLE');
+  const hours = Math.max(2, Math.min(168, Number(payload.durationHours || 24)));
+  let code = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = randomRoomCode();
+    const exists = await env.DB.prepare('SELECT id FROM guest_rooms WHERE code=?').bind(candidate).first();
+    if (!exists) { code = candidate; break; }
+  }
+  if (!code) throw new AppError('참여방 주소를 만들지 못했습니다. 다시 시도해 주세요.', 'CODE_FAILED', 500);
+  const id = uid('room');
+  const created = nowIso();
+  const expires = new Date(Date.now() + hours * 3600000).toISOString();
+  await env.DB.prepare(
+    'INSERT INTO guest_rooms(id,teacher_id,title,code,status,expires_at,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)'
+  ).bind(id, session.user_id, title, code, 'open', expires, 1, created, created).run();
+  const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(id).first();
+  return guestRoomJson(row);
+}
+
+async function joinGuestRoom(env, payload) {
+  const code = String(payload.code || '').trim().toUpperCase();
+  const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE code=?').bind(code).first();
+  if (!row) throw new AppError('참여방 주소가 올바르지 않습니다.', 'ROOM_NOT_FOUND', 404);
+  const room = guestRoomJson(row);
+  if (room.status !== 'open') {
+    throw new AppError(room.status === 'expired' ? '이 참여방의 이용 시간이 끝났어요.' : '선생님이 참여방을 닫았어요.', 'ROOM_CLOSED', 410);
+  }
+  const participantId = uid('guest');
+  const token = await issueSession(env, 'guest', participantId, row.id, row.expires_at);
+  return { token, user: { id: participantId }, room };
+}
+
+async function getTeacherGuestRoom(env, session, payload) {
+  return guestRoomData(env, await ownedGuestRoom(env, session, payload.roomId));
+}
+
+async function getGuestRoom(env, session) {
+  const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(session.class_id).first();
+  if (!row) throw new AppError('참여방을 찾을 수 없습니다.', 'ROOM_NOT_FOUND', 404);
+  return guestRoomData(env, row, session.user_id);
+}
+
+async function requireOpenGuestRoom(env, session) {
+  const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(session.class_id).first();
+  if (!row) throw new AppError('참여방을 찾을 수 없습니다.', 'ROOM_NOT_FOUND', 404);
+  const room = guestRoomJson(row);
+  if (room.status !== 'open') {
+    throw new AppError(room.status === 'expired' ? '이 참여방의 이용 시간이 끝났어요.' : '선생님이 참여방을 닫았어요.', 'ROOM_CLOSED', 410);
+  }
+  return row;
+}
+
+async function upsertGuestPost(env, session, payload) {
+  const room = await requireOpenGuestRoom(env, session);
+  const kind = String(payload.kind || 'opinion');
+  if (!['opinion', 'board', 'word'].includes(kind)) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
+  const maxLength = kind === 'word' ? 30 : (kind === 'opinion' ? 800 : 2000);
+  const text = String(payload.text || '').trim().slice(0, maxLength);
+  const uploadedFiles = kind === 'board' ? (payload.files || []) : [];
+  const keptFiles = kind === 'board' ? (payload.keepAttachmentIds || []) : [];
+  if (!text && !uploadedFiles.length && !keptFiles.length) throw new AppError(kind === 'board' ? '글이나 파일을 올려 주세요.' : '내용을 입력해 주세요.', 'EMPTY_POST');
+  let row = null;
+  const postId = String(payload.postId || '');
+  if (postId) {
+    row = await env.DB.prepare(
+      'SELECT * FROM guest_posts WHERE id=? AND room_id=? AND participant_id=?'
+    ).bind(postId, room.id, session.user_id).first();
+    if (!row) throw new AppError('내 글만 수정할 수 있습니다.', 'FORBIDDEN', 403);
+    if (row.kind !== kind) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
+    await env.DB.prepare('UPDATE guest_posts SET text=?,updated_at=? WHERE id=?')
+      .bind(text, nowIso(), row.id).run();
+  } else {
+    const created = nowIso();
+    row = { id: uid('gpost') };
+    await env.DB.prepare(
+      'INSERT INTO guest_posts(id,room_id,participant_id,kind,text,created_at,updated_at) VALUES(?,?,?,?,?,?,?)'
+    ).bind(row.id, room.id, session.user_id, kind, text, created, created).run();
+  }
+  const attachments = await replaceAttachments(
+    env, 'guest_post', row.id, keptFiles, uploadedFiles, session
+  );
+  await touchGuestRoom(env, room.id);
+  const saved = await env.DB.prepare('SELECT * FROM guest_posts WHERE id=?').bind(row.id).first();
+  const result = guestPostJson(saved, session.user_id);
+  result.attachments = attachments;
+  return result;
+}
+
+async function deleteGuestPost(env, session, payload) {
+  const postId = String(payload.postId || '');
+  const row = await env.DB.prepare('SELECT * FROM guest_posts WHERE id=?').bind(postId).first();
+  if (!row) return { deleted: true };
+  if (session.role === 'teacher') {
+    await ownedGuestRoom(env, session, row.room_id);
+  } else if (session.role !== 'guest' || row.room_id !== session.class_id || row.participant_id !== session.user_id) {
+    throw new AppError('내 글만 삭제할 수 있습니다.', 'FORBIDDEN', 403);
+  }
+  await deleteOwnerFiles(env, 'guest_post', [row.id]);
+  await env.DB.prepare('DELETE FROM guest_posts WHERE id=?').bind(row.id).run();
+  await touchGuestRoom(env, row.room_id);
+  return { deleted: true };
+}
+
+async function closeGuestRoom(env, session, payload) {
+  const row = await ownedGuestRoom(env, session, payload.roomId);
+  const status = String(payload.status || '') === 'open' && row.expires_at > nowIso() ? 'open' : 'closed';
+  await env.DB.prepare('UPDATE guest_rooms SET status=?,version=version+1,updated_at=? WHERE id=?')
+    .bind(status, nowIso(), row.id).run();
+  return guestRoomJson(await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(row.id).first());
+}
+
+async function deleteGuestRoom(env, session, payload) {
+  const row = await ownedGuestRoom(env, session, payload.roomId);
+  const postRows = await all(env.DB.prepare('SELECT id FROM guest_posts WHERE room_id=?').bind(row.id));
+  await deleteOwnerFiles(env, 'guest_post', postRows.map((item) => item.id));
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM sessions WHERE role='guest' AND class_id=?").bind(row.id),
+    env.DB.prepare('DELETE FROM guest_posts WHERE room_id=?').bind(row.id),
+    env.DB.prepare('DELETE FROM guest_rooms WHERE id=?').bind(row.id)
+  ]);
+  return { deleted: true };
+}
+
+async function guestHeartbeat(env, session) {
+  const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(session.class_id).first();
+  if (!row) throw new AppError('참여방을 찾을 수 없습니다.', 'ROOM_NOT_FOUND', 404);
+  return { room: guestRoomJson(row) };
 }
 
 async function fileStorageStatus(env) {
@@ -1148,6 +1378,20 @@ async function fileAccess(env, session, fileId) {
   }
   let classId = '';
   let studentId = '';
+  if (link.owner_type === 'guest_post') {
+    const owner = await env.DB.prepare(
+      'SELECT p.room_id,p.participant_id,r.teacher_id FROM guest_posts p JOIN guest_rooms r ON r.id=p.room_id WHERE p.id=?'
+    ).bind(link.owner_id).first();
+    if (!owner) throw new AppError('파일 연결 정보를 찾을 수 없습니다.', 'FILE_NOT_FOUND', 404);
+    if (session.role === 'teacher') {
+      if (owner.teacher_id !== session.user_id) throw new AppError('파일 접근 권한이 없습니다.', 'FORBIDDEN', 403);
+      return { row, downloadAllowed: true };
+    }
+    if (session.role !== 'guest' || session.class_id !== owner.room_id) {
+      throw new AppError('파일 접근 권한이 없습니다.', 'FORBIDDEN', 403);
+    }
+    return { row, downloadAllowed: owner.participant_id === session.user_id };
+  }
   if (link.owner_type === 'content') {
     const owner = await env.DB.prepare('SELECT class_id FROM contents WHERE id=?').bind(link.owner_id).first();
     classId = owner && owner.class_id;
@@ -1415,16 +1659,20 @@ async function handleAction(request, env) {
   if (action === 'teacherLogin') return teacherLogin(env, payload);
   if (action === 'studentLogin') return studentLogin(env, payload);
   if (!(await schemaReady(env))) throw new AppError('먼저 교사 계정을 만들어 주세요.', 'SETUP_REQUIRED', 404);
+  if (action === 'joinGuestRoom') return joinGuestRoom(env, payload);
   const teacherActions = new Set([
     'teacherDashboard', 'createClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
-    'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus'
+    'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
+    'createGuestRoom', 'getTeacherGuestRoom', 'closeGuestRoom', 'deleteGuestRoom'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
+  const guestActions = new Set(['getGuestRoom', 'upsertGuestPost', 'guestHeartbeat']);
   let role = '';
   if (teacherActions.has(action)) role = 'teacher';
   else if (studentActions.has(action)) role = 'student';
+  else if (guestActions.has(action)) role = 'guest';
   const session = await sessionFromToken(env, body.token, role);
 
   switch (action) {
@@ -1457,6 +1705,14 @@ async function handleAction(request, env) {
     case 'getFileContent': return prepareFileAccess(env, request, session, { fileId: payload.fileId, intent: 'preview' });
     case 'createDownloadBundle': return createDownloadBundle(env, request, session, payload);
     case 'archiveFilesToDrive': return archiveFilesToDrive(env, request, session, payload);
+    case 'createGuestRoom': return createGuestRoom(env, session, payload);
+    case 'getTeacherGuestRoom': return getTeacherGuestRoom(env, session, payload);
+    case 'getGuestRoom': return getGuestRoom(env, session);
+    case 'upsertGuestPost': return upsertGuestPost(env, session, payload);
+    case 'deleteGuestPost': return deleteGuestPost(env, session, payload);
+    case 'closeGuestRoom': return closeGuestRoom(env, session, payload);
+    case 'deleteGuestRoom': return deleteGuestRoom(env, session, payload);
+    case 'guestHeartbeat': return guestHeartbeat(env, session);
     default: throw new AppError(`지원하지 않는 요청입니다: ${action}`, 'UNKNOWN_ACTION', 404);
   }
 }
@@ -1466,6 +1722,7 @@ async function handleUpload(request, env) {
   const auth = request.headers.get('Authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '').trim();
   const session = await sessionFromToken(env, token);
+  if (session.role === 'guest') await requireOpenGuestRoom(env, session);
   const declaredSize = Number(request.headers.get('X-File-Size') || request.headers.get('Content-Length') || 0);
   const maxBytes = 25 * 1024 * 1024;
   if (!declaredSize || declaredSize > maxBytes) {
@@ -1542,6 +1799,24 @@ function studentLoginQr(request) {
   });
 }
 
+function guestRoomQr(request) {
+  const requestUrl = new URL(request.url);
+  const codeValue = String(requestUrl.searchParams.get('code') || '').trim().toUpperCase();
+  if (!/^[A-Z2-9]{12}$/.test(codeValue)) throw new AppError('참여방 QR 코드가 올바르지 않습니다.', 'INVALID_ROOM_CODE');
+  const guestUrl = `${requestUrl.origin}/#/guest/${encodeURIComponent(codeValue)}/opinion`;
+  const code = qrcode(0, 'M');
+  code.addData(guestUrl, 'Byte');
+  code.make();
+  const svg = code.createSvgTag({ cellSize: 5, margin: 4, scalable: true });
+  return new Response(svg, {
+    headers: {
+      'Content-Type': 'image/svg+xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=3600',
+      'X-Content-Type-Options': 'nosniff'
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -1551,6 +1826,9 @@ export default {
     try {
       if (url.pathname === '/student-login-qr.svg' && request.method === 'GET') {
         return studentLoginQr(request);
+      }
+      if (url.pathname === '/guest-room-qr.svg' && request.method === 'GET') {
+        return guestRoomQr(request);
       }
       if (url.pathname === '/api/health') {
         return ok({ status: 'ok', databaseReady: await schemaReady(env), provider: 'cloudflare', release: RELEASE }, request);
