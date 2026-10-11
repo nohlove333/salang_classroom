@@ -2341,7 +2341,7 @@ video {
 .quick-room-card h3 { margin: 26px 0 8px; font-size: 1.25rem; }
 .quick-room-card > p { margin: 0; color: var(--muted); }
 .quick-room-card-top { color: var(--muted); font-size: 0.82rem; }
-.quick-room-actions { margin-top: 30px; justify-content: flex-start; }
+.quick-room-actions { flex-wrap: wrap; margin-top: 30px; justify-content: flex-start; }
 .quick-room-actions .danger { margin-left: auto; }
 
 .status-pill {
@@ -2526,6 +2526,16 @@ video {
   font-size: clamp(1.12rem, 2vw, 1.38rem);
   line-height: 1.45;
 }
+
+/* v43 · 1회성 참여방 선생님 글 접기/펼치기 */
+.guest-teacher-notice { margin-bottom: 18px; }
+.guest-teacher-notice .board-notice-body { padding: 16px; }
+.guest-teacher-notice .guest-feed { margin: 0; }
+.guest-teacher-notice .guest-feed-card {
+  border-color: rgba(198, 125, 151, 0.18);
+  background: rgba(255, 251, 252, 0.72);
+}
+.guest-teacher-notice .guest-feed-card:first-child:last-child { min-height: 0; }
 
 .guest-feed { display: grid; gap: 15px; }
 .guest-feed.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }

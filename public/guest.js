@@ -9,6 +9,7 @@
   var roomData = null;
   var syncTimer = null;
   var syncBusy = false;
+  var teacherNoticeOpen = {};
 
   function loading(container) {
     container.innerHTML = '<section class="loading-screen"><div class="loader"></div><p>QR 참여방으로 들어가고 있어요.</p></section>';
@@ -102,6 +103,18 @@
       '<button class="button" type="submit">의견 올리기</button></div></form>';
   }
 
+  function teacherNotice(posts) {
+    if (!posts.length) return '';
+    var key = activeCode + ':' + activeTab;
+    var title = activeTab === 'board' ? '선생님 공유 자료' : (activeTab === 'cloud' ? '선생님 제시어' : '선생님 안내 글');
+    return '<details class="board-teacher-notice guest-teacher-notice" data-guest-teacher-notice="' + UI.attr(key) + '" ' +
+      (teacherNoticeOpen[key] !== false ? 'open' : '') + '>' +
+      '<summary><span class="board-notice-label">선생님 글</span><span class="board-notice-title">' + UI.escape(title) + '</span>' +
+        '<span class="board-notice-count">' + posts.length + '개</span><span class="board-notice-chevron" aria-hidden="true">⌄</span></summary>' +
+      '<div class="board-notice-body"><div class="guest-feed ' + UI.attr(activeTab) + '">' +
+        posts.slice().reverse().map(postCard).join('') + '</div></div></details>';
+  }
+
   function paint() {
     if (!activeContainer || !activeContainer.isConnected || !roomData) return;
     var room = roomData.room;
@@ -109,21 +122,29 @@
     var opinions = posts.filter(function (post) { return post.kind === 'opinion'; });
     var boards = posts.filter(function (post) { return post.kind === 'board'; });
     var words = posts.filter(function (post) { return post.kind === 'word'; });
-    var shown = activeTab === 'board' ? boards : opinions;
-    var feed = activeTab === 'cloud' ? wordCloud(words) :
-      (shown.length ? shown.slice().reverse().map(postCard).join('') : UI.empty(activeTab === 'board' ? '아직 공유된 파일이 없어요' : '아직 의견이 없어요', '첫 번째 익명 글을 남겨 보세요.'));
+    var shown = activeTab === 'cloud' ? words : (activeTab === 'board' ? boards : opinions);
+    var teacherPosts = shown.filter(function (post) { return post.teacher; });
+    var participantPosts = shown.filter(function (post) { return !post.teacher; });
+    var feed = activeTab === 'cloud' ? wordCloud(participantPosts) :
+      (participantPosts.length ? participantPosts.slice().reverse().map(postCard).join('') : UI.empty(activeTab === 'board' ? '아직 공유된 파일이 없어요' : '아직 의견이 없어요', '첫 번째 익명 글을 남겨 보세요.'));
     activeContainer.innerHTML = '<section class="app-page guest-room-page public">' +
       '<header class="guest-public-head"><div><p class="section-kicker">Live participation</p><h1>' + UI.escape(room.title) + '</h1>' +
         '<p><span class="status-pill ' + UI.attr(room.status) + '">' + UI.escape(roomStatusLabel(room.status)) + '</span> · ' + UI.escape(UI.date(room.expiresAt, true)) + '까지</p></div>' +
         '<div class="guest-anonymous-badge"><strong>익명</strong><span>이름 없이 참여 중</span></div></header>' +
       '<nav class="tab-bar guest-room-tabs" aria-label="참여방 메뉴">' + tabLink('opinion', '의견 나눔', opinions.length) +
         tabLink('board', '파일 보드', boards.length) + tabLink('cloud', '아이디어 구름', words.length) + '</nav>' +
-      composeBox(room.status === 'open') + '<section class="guest-feed ' + UI.attr(activeTab) + '">' + feed + '</section></section>';
+      teacherNotice(teacherPosts) + composeBox(room.status === 'open') +
+      '<section class="guest-feed ' + UI.attr(activeTab) + '">' + feed + '</section></section>';
     bindEvents();
     UI.bindFiles(activeContainer, 'guest');
   }
 
   function bindEvents() {
+    activeContainer.querySelectorAll('[data-guest-teacher-notice]').forEach(function (details) {
+      details.addEventListener('toggle', function () {
+        teacherNoticeOpen[details.dataset.guestTeacherNotice] = details.open;
+      });
+    });
     activeContainer.querySelectorAll('[data-new-guest-post]').forEach(function (form) {
       form.addEventListener('submit', async function (event) {
         event.preventDefault();

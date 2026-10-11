@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-11-v42';
+const RELEASE = '2026-10-11-v43';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -946,6 +946,15 @@ async function closeGuestRoom(env, session, payload) {
   return guestRoomJson(await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(row.id).first());
 }
 
+async function updateGuestRoom(env, session, payload) {
+  const row = await ownedGuestRoom(env, session, payload.roomId);
+  const title = String(payload.title || '').trim().slice(0, 60);
+  if (!title) throw new AppError('참여방 이름을 입력해 주세요.', 'INVALID_TITLE');
+  await env.DB.prepare('UPDATE guest_rooms SET title=?,version=version+1,updated_at=? WHERE id=?')
+    .bind(title, nowIso(), row.id).run();
+  return guestRoomJson(await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(row.id).first());
+}
+
 async function deleteGuestRoom(env, session, payload) {
   const row = await ownedGuestRoom(env, session, payload.roomId);
   const postRows = await all(env.DB.prepare('SELECT id FROM guest_posts WHERE room_id=?').bind(row.id));
@@ -1708,7 +1717,7 @@ async function handleAction(request, env) {
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
     'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
-    'createGuestRoom', 'getTeacherGuestRoom', 'closeGuestRoom', 'deleteGuestRoom'
+    'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'deleteGuestRoom'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
   const guestActions = new Set(['getGuestRoom', 'guestHeartbeat']);
@@ -1751,6 +1760,7 @@ async function handleAction(request, env) {
     case 'archiveFilesToDrive': return archiveFilesToDrive(env, request, session, payload);
     case 'createGuestRoom': return createGuestRoom(env, session, payload);
     case 'getTeacherGuestRoom': return getTeacherGuestRoom(env, session, payload);
+    case 'updateGuestRoom': return updateGuestRoom(env, session, payload);
     case 'getGuestRoom': return getGuestRoom(env, session);
     case 'upsertGuestPost': return upsertGuestPost(env, session, payload);
     case 'deleteGuestPost': return deleteGuestPost(env, session, payload);
