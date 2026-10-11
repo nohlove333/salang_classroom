@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-11-v40';
+const RELEASE = '2026-10-11-v42';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS board_posts (
   student_id TEXT NOT NULL,
   student_number INTEGER NOT NULL,
   student_name TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'published',
   revision_message TEXT NOT NULL DEFAULT '',
@@ -326,7 +327,18 @@ async function ensureSchema(env) {
       );
     }
   }
+  await ensureBoardPostTitleSchema(env);
   featureSchemaVerified = true;
+}
+
+async function ensureBoardPostTitleSchema(env) {
+  const columns = await all(env.DB.prepare('PRAGMA table_info(board_posts)'));
+  if (columns.some((column) => column.name === 'title')) return;
+  try {
+    await env.DB.prepare("ALTER TABLE board_posts ADD COLUMN title TEXT NOT NULL DEFAULT ''").run();
+  } catch (error) {
+    if (!String(error && error.message || '').includes('duplicate column name')) throw error;
+  }
 }
 
 async function schemaReady(env) {
@@ -338,6 +350,7 @@ async function schemaReady(env) {
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
       ));
       if (featureTables.length < 4) await ensureSchema(env);
+      else await ensureBoardPostTitleSchema(env);
       featureSchemaVerified = true;
     }
     return true;
@@ -445,6 +458,7 @@ function postJson(row) {
     studentId: row.student_id,
     studentNumber: Number(row.student_number),
     studentName: row.student_name,
+    title: row.title || '',
     text: row.text || '',
     status: row.status || 'published',
     revisionMessage: row.revision_message || '',
@@ -1231,6 +1245,7 @@ async function upsertBoardPost(env, session, payload) {
   const student = await env.DB.prepare('SELECT * FROM students WHERE id=? AND class_id=?')
     .bind(session.user_id, session.class_id).first();
   if (!student) throw new AppError('학생 정보를 찾을 수 없습니다.', 'UNAUTHORIZED', 401);
+  const title = String(payload.title || '').trim().slice(0, 80);
   const text = String(payload.text || '').trim();
   const hasFiles = (payload.files || []).length || (payload.keepAttachmentIds || []).length;
   if (!text && !hasFiles) throw new AppError('내용이나 파일을 하나 이상 게시해 주세요.', 'EMPTY_POST');
@@ -1238,14 +1253,15 @@ async function upsertBoardPost(env, session, payload) {
   let row = await env.DB.prepare('SELECT * FROM board_posts WHERE board_id=? AND student_id=?')
     .bind(board.id, student.id).first();
   if (row) {
+    const nextTitle = Object.prototype.hasOwnProperty.call(payload, 'title') ? title : (row.title || '');
     await env.DB.prepare(
-      "UPDATE board_posts SET text=?,student_name=?,student_number=?,status='published',revision_message='',updated_at=? WHERE id=?"
-    ).bind(text, student.name, student.number, time, row.id).run();
+      "UPDATE board_posts SET title=?,text=?,student_name=?,student_number=?,status='published',revision_message='',updated_at=? WHERE id=?"
+    ).bind(nextTitle, text, student.name, student.number, time, row.id).run();
   } else {
     const id = uid('post');
     await env.DB.prepare(
-      'INSERT INTO board_posts(id,board_id,class_id,student_id,student_number,student_name,text,status,revision_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,\'published\',\'\',?,?)'
-    ).bind(id, board.id, student.class_id, student.id, student.number, student.name, text, time, time).run();
+      'INSERT INTO board_posts(id,board_id,class_id,student_id,student_number,student_name,title,text,status,revision_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,\'published\',\'\',?,?)'
+    ).bind(id, board.id, student.class_id, student.id, student.number, student.name, title, text, time, time).run();
     row = await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(id).first();
   }
   const attachments = await replaceAttachments(env, 'board_post', row.id, payload.keepAttachmentIds, payload.files, session);

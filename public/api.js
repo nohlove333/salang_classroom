@@ -432,6 +432,9 @@
         }
       });
     });
+    (state.boardPosts || []).forEach(function (item) {
+      if (typeof item.title === 'undefined') { item.title = ''; changed = true; }
+    });
     if (!Array.isArray(state.ideas)) { state.ideas = []; changed = true; }
     if (!Array.isArray(state.ideaPosts)) { state.ideaPosts = []; changed = true; }
     if (!state.timers || typeof state.timers !== 'object') { state.timers = {}; changed = true; }
@@ -546,6 +549,7 @@
         studentId: 'class_1_student_' + p,
         studentNumber: p,
         studentName: '학생 ' + p,
+        title: p === 1 ? '갈등을 해결하는 첫걸음' : '서로를 존중하는 대화법',
         text: p === 1 ? '서로의 말을 끝까지 듣는 것이 갈등 해결의 시작이라고 생각합니다.' : '내 생각을 솔직하게 말하되 상대방을 탓하지 않겠습니다.',
         attachments: [],
         status: p === 2 ? 'revision' : 'published',
@@ -971,6 +975,7 @@
           return item.boardId === payload.boardId && item.studentId === bs.user.id;
         });
         if (post) {
+          post.title = String(payload.title || '').trim();
           post.text = payload.text || '';
           post.attachments = await replaceDemoAttachments(
             post.attachments,
@@ -995,6 +1000,7 @@
             studentId: bs.user.id,
             studentNumber: bs.user.number,
             studentName: bs.user.name,
+            title: String(payload.title || '').trim(),
             text: payload.text || '',
             attachments: postFiles,
             status: 'published',

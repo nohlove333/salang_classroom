@@ -2428,6 +2428,105 @@ video {
   background: rgba(255, 249, 251, 0.74);
 }
 
+/* v41 · 보드 안내 접기/펼치기와 출석번호 순서 */
+.board-teacher-notice {
+  margin: 0 0 20px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.64);
+  box-shadow: 0 12px 32px rgba(70, 75, 86, 0.055);
+  backdrop-filter: blur(16px);
+}
+
+.board-teacher-notice summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  padding: 15px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.board-teacher-notice summary::-webkit-details-marker { display: none; }
+.board-teacher-notice summary:hover { background: rgba(255, 255, 255, 0.48); }
+.board-notice-label {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(242, 218, 227, 0.72);
+  color: #8d4861;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+.board-notice-title {
+  overflow: hidden;
+  font-size: 1.02rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-notice-count { color: var(--muted); font-size: 0.8rem; }
+.board-notice-chevron {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(237, 239, 242, 0.8);
+  font-size: 1.15rem;
+  transition: transform 160ms ease;
+}
+.board-teacher-notice[open] .board-notice-chevron { transform: rotate(180deg); }
+.board-notice-body {
+  padding: 18px;
+  border-top: 1px solid rgba(119, 126, 139, 0.12);
+}
+.board-notice-body .item-body { margin: 15px 0; line-height: 1.75; }
+.board-notice-body > .button { margin-top: 14px; }
+
+.board-sequence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 24px 0 13px;
+  padding: 14px 17px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.48);
+}
+.board-sequence-head > div { display: flex; align-items: baseline; gap: 10px; }
+.board-sequence-head strong { font-size: 0.94rem; }
+.board-sequence-head span { color: var(--muted); font-size: 0.8rem; }
+.board-sequence-head b { color: #59616d; font-size: 0.82rem; white-space: nowrap; }
+.board-sequence-head.compact { margin-top: 12px; }
+.board-management-head { margin-top: 18px; }
+.board-management-head > div > strong { display: block; margin-bottom: 4px; }
+.board-management-head p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.ordered-board-grid .student-tile { min-width: 0; }
+
+/* v42 · 학생 보드 게시글 제목 */
+.tile-post-title {
+  margin: 17px 0 7px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.96rem;
+  font-weight: 800;
+  line-height: 1.42;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-post-title + .tile-content { margin-top: 0; }
+.board-post-detail-title {
+  margin: 20px 0 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(119, 126, 139, 0.14);
+  font-size: clamp(1.12rem, 2vw, 1.38rem);
+  line-height: 1.45;
+}
+
 .guest-feed { display: grid; gap: 15px; }
 .guest-feed.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .guest-feed-card {
@@ -2517,6 +2616,14 @@ video {
   .guest-room-tabs { overflow-x: auto; justify-content: flex-start; }
   .guest-room-tabs .tab-button { flex: 0 0 auto; min-width: 122px; }
   .guest-word-cloud { min-height: 270px; padding: 28px 18px; }
+  .board-teacher-notice summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 13px 14px;
+  }
+  .board-notice-count { display: none; }
+  .board-sequence-head { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .board-sequence-head > div { align-items: flex-start; flex-direction: column; gap: 3px; }
 }
 
 /* 아이디어 구름 */

@@ -1547,17 +1547,21 @@
     }, []);
     var byStudent = {};
     posts.forEach(function (post) { byStudent[post.studentId] = post; });
-    var cards = classData.students.map(function (student) {
+    var orderedStudents = classData.students.slice().sort(function (left, right) {
+      return Number(left.number || 0) - Number(right.number || 0) || String(left.name || '').localeCompare(String(right.name || ''), 'ko');
+    });
+    var cards = orderedStudents.map(function (student) {
       var post = byStudent[student.id];
       var context = post ? {
-        heading: student.number + '번 ' + student.name + '의 글',
-        meta: board.title,
+        heading: post.title || student.number + '번 ' + student.name + '의 글',
+        meta: student.number + '번 ' + student.name + ' · ' + board.title,
         text: post.text || ''
       } : null;
       return '<article class="student-tile board-feed-card" tabindex="' + (post ? '0' : '-1') + '" data-teacher-post="' + UI.attr(post ? post.id : '') + '">' +
         '<div><span class="tile-number">' + UI.escape(student.number) + '</span><span class="tile-name">' + UI.escape(student.name) + '</span></div>' +
         (post
-          ? '<div class="tile-content">' + UI.escape((post.text || '첨부파일 게시물').slice(0, 92)) +
+          ? '<h3 class="tile-post-title">' + UI.escape(post.title || '제목 없는 글') + '</h3>' +
+            '<div class="tile-content">' + UI.escape((post.text || '첨부파일 게시물').slice(0, 92)) +
             (post.text && post.text.length > 92 ? '…' : '') + '</div>' +
             UI.attachmentGallery(post.attachments, 'teacher', { compact: true, maxItems: 1, context: context }) +
             (post.status === 'revision' ? '<div class="tile-review-state revision">반려 · 수정 필요</div>' : '') +
@@ -1572,13 +1576,19 @@
         '<div class="detail-meta" style="margin-bottom:14px">' + categoryBadge(board) +
           '<span class="status-badge ' + (board.status === 'open' ? 'open' : '') + '">' +
             (board.status === 'open' ? '작성 가능' : '읽기 전용') + '</span></div>' +
-        '<div class="content-head"><div><p>' + UI.escape(board.body || '') + '</p></div>' +
+        '<details class="board-teacher-notice teacher-board-notice" open><summary><span class="board-notice-label">선생님 안내</span>' +
+          '<span class="board-notice-title">' + UI.escape(board.title) + '</span><span class="board-notice-chevron" aria-hidden="true">⌄</span></summary>' +
+          '<div class="board-notice-body">' +
+            (board.body ? '<div class="item-body">' + UI.nl2br(board.body) + '</div>' : '<p class="muted-text">작성한 안내 내용이 없어요.</p>') +
+            UI.attachments(board.attachments, 'teacher') + '</div></details>' +
+        '<div class="content-head board-management-head"><div><strong>출석번호 순서</strong><p>학생 카드가 1번부터 차례대로 정렬되어 있어요.</p></div>' +
           '<div class="modal-actions" style="margin-top:0">' +
             '<button class="button soft" type="button" data-board-archive ' + (!boardFiles.length ? 'disabled' : '') + '>Drive로 일괄 보관</button>' +
             '<button class="button secondary" type="button" data-board-download ' + (!boardFiles.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button>' +
           '</div></div>' +
-        UI.attachments(board.attachments, 'teacher') +
-        '<div class="board-grid" style="margin-top:20px">' + cards + '</div>'
+        '<div class="board-sequence-head compact"><div><strong>학생 게시 현황</strong><span>작성한 카드를 눌러 확인·반려할 수 있어요.</span></div>' +
+          '<b>' + posts.length + '/' + orderedStudents.length + '명 작성</b></div>' +
+        '<div class="board-grid ordered-board-grid">' + cards + '</div>'
     });
     UI.bindFiles(dialog, 'teacher');
     var bundleButton = dialog.querySelector('[data-board-download]');
@@ -1616,10 +1626,11 @@
         statusText +
         '<div class="detail-meta"><span>게시 ' + UI.escape(UI.date(post.createdAt, true)) + '</span>' +
           (post.updatedAt !== post.createdAt ? '<span>수정 ' + UI.escape(UI.date(post.updatedAt, true)) + '</span>' : '') + '</div>' +
+        '<h3 class="board-post-detail-title">' + UI.escape(post.title || '제목 없는 글') + '</h3>' +
         '<div class="detail-body">' + (post.text ? UI.nl2br(post.text) : '<span class="muted-text">작성된 글 없이 파일만 게시했어요.</span>') + '</div>' +
         UI.attachmentGallery(post.attachments, 'teacher', { context: {
-          heading: post.studentNumber + '번 ' + post.studentName + '의 글',
-          meta: board.title,
+          heading: post.title || post.studentNumber + '번 ' + post.studentName + '의 글',
+          meta: post.studentNumber + '번 ' + post.studentName + ' · ' + board.title,
           text: post.text || ''
         } }) +
         '<div class="modal-actions moderation-actions">' +

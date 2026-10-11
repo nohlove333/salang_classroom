@@ -15,6 +15,7 @@
   var heartbeatBusy = false;
   var studentRefreshBusy = false;
   var countdownTimer = null;
+  var boardNoticeOpen = {};
 
   function sessionOrLogin() {
     var session = window.LearnSession.get('student');
@@ -345,12 +346,15 @@
             UI.attr(item.id) + '">' + UI.escape(item.title) + '</button>';
         }).join('') + '</div>'
       : '';
-    var cards = studentData.students.map(function (student) {
+    var orderedStudents = studentData.students.slice().sort(function (left, right) {
+      return Number(left.number || 0) - Number(right.number || 0) || String(left.name || '').localeCompare(String(right.name || ''), 'ko');
+    });
+    var cards = orderedStudents.map(function (student) {
       var post = byStudent[student.id];
       var mine = student.id === session.user.id;
       var previewContext = post ? {
-        heading: student.number + '번 ' + student.name + '의 글',
-        meta: board.title,
+        heading: post.title || student.number + '번 ' + student.name + '의 글',
+        meta: student.number + '번 ' + student.name + ' · ' + board.title,
         text: post.text || '',
         edit: mine && board.status === 'open'
           ? { kind: 'board', boardId: board.id, postId: post.id, label: '게시글 수정' }
@@ -361,7 +365,8 @@
         '<div><span class="tile-number">' + UI.escape(student.number) + '</span><span class="tile-name">' +
           UI.escape(student.name) + (mine ? ' · 나' : '') + '</span></div>' +
         (post
-          ? '<div class="tile-content">' + UI.escape((post.text || '첨부파일을 올렸어요.').slice(0, 92)) +
+          ? '<h3 class="tile-post-title">' + UI.escape(post.title || '제목 없는 글') + '</h3>' +
+            '<div class="tile-content">' + UI.escape((post.text || '첨부파일을 올렸어요.').slice(0, 92)) +
             (post.text && post.text.length > 92 ? '…' : '') + '</div>' +
             UI.attachmentGallery(post.attachments, 'student', { compact: true, maxItems: 1, context: previewContext, allowDownload: mine }) +
             (mine && post.status === 'revision' ? '<div class="tile-review-state revision">수정이 필요해요</div>' : '') +
@@ -372,12 +377,18 @@
       '</article>';
     }).join('');
     return head + selectors +
-      '<article class="item-card content-clickable" tabindex="0" data-view-board="' + UI.attr(board.id) +
-        '" aria-label="' + UI.attr(board.title + ' 상세 보기') + '" style="margin-bottom:20px"><div class="item-top"><div><h3>' + UI.escape(board.title) + '</h3>' +
-        '<div class="meta-line">' + categoryBadge(board) + '<span class="status-badge ' + (board.status === 'open' ? 'open' : '') + '">' +
-          (board.status === 'open' ? '작성 가능' : '읽기 전용') + '</span><span>게시 ' + posts.length + '/' + studentData.students.length + '명</span></div></div></div>' +
-        (board.body ? '<p class="item-body">' + UI.escape(board.body) + '</p>' : '') + UI.attachments(board.attachments, 'student') + '</article>' +
-      '<div class="board-grid">' + cards + '</div>';
+      '<details class="board-teacher-notice" data-board-notice="' + UI.attr(board.id) + '" ' + (boardNoticeOpen[board.id] !== false ? 'open' : '') + '>' +
+        '<summary><span class="board-notice-label">선생님 안내</span><span class="board-notice-title">' + UI.escape(board.title) + '</span>' +
+          '<span class="board-notice-count">게시 ' + posts.length + '/' + orderedStudents.length + '명</span><span class="board-notice-chevron" aria-hidden="true">⌄</span></summary>' +
+        '<div class="board-notice-body"><div class="meta-line">' + categoryBadge(board) + '<span class="status-badge ' + (board.status === 'open' ? 'open' : '') + '">' +
+          (board.status === 'open' ? '작성 가능' : '읽기 전용') + '</span></div>' +
+          (board.body ? '<div class="item-body">' + UI.nl2br(board.body) + '</div>' : '<p class="muted-text">선생님이 작성한 안내 내용이 없어요.</p>') +
+          UI.attachments(board.attachments, 'student') +
+          '<button class="button ghost small" type="button" data-board-notice-popup="' + UI.attr(board.id) + '">안내 전체 보기</button></div>' +
+      '</details>' +
+      '<div class="board-sequence-head"><div><strong>출석번호 순서</strong><span>1번부터 차례대로 자기 카드에 올려요.</span></div>' +
+        '<b>' + posts.length + '/' + orderedStudents.length + '명 작성</b></div>' +
+      '<div class="board-grid ordered-board-grid">' + cards + '</div>';
   }
 
   function ideaGroupOrder(name) {
@@ -530,6 +541,17 @@
       bindDetailCard(card, function () {
         var item = studentData.boards.find(function (entry) { return entry.id === card.dataset.viewBoard; });
         if (item) openStudentContentDetail('board', item, session, container, tab);
+      });
+    });
+    container.querySelectorAll('[data-board-notice-popup]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var item = studentData.boards.find(function (entry) { return entry.id === button.dataset.boardNoticePopup; });
+        if (item) openStudentContentDetail('board', item, session, container, tab);
+      });
+    });
+    container.querySelectorAll('[data-board-notice]').forEach(function (details) {
+      details.addEventListener('toggle', function () {
+        boardNoticeOpen[details.dataset.boardNotice] = details.open;
       });
     });
     container.querySelectorAll('[data-view-idea]').forEach(function (card) {
@@ -782,6 +804,8 @@
       html:
         (post && post.status === 'revision' ? '<div class="revision-note"><strong>선생님이 수정을 요청했어요.</strong><br>내용이나 첨부파일을 고친 뒤 다시 게시해 주세요.</div>' : '') +
         '<form class="form-stack" data-board-form style="margin-top:16px">' +
+          '<div class="field"><label for="board-post-title">게시글 제목</label><input id="board-post-title" name="title" required maxlength="80" value="' +
+            UI.attr(post ? post.title || '' : '') + '" placeholder="친구들이 내용을 알아보기 쉬운 제목을 써 주세요."></div>' +
           uploadFields(post ? post.attachments : [], post ? post.text : '', '게시글 내용') +
           '<div class="modal-actions">' +
             (post ? '<button class="button danger" type="button" data-delete-my-post>내 글 삭제</button>' : '') +
@@ -794,7 +818,13 @@
     dialog.querySelector('[data-board-form]').addEventListener('submit', async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
-      var text = String(new FormData(form).get('text') || '').trim();
+      var values = new FormData(form);
+      var title = String(values.get('title') || '').trim();
+      var text = String(values.get('text') || '').trim();
+      if (!title) {
+        UI.toast('게시글 제목을 입력해 주세요.', 'error');
+        return;
+      }
       if (!text && !picker.files().length && !picker.keepAttachmentIds().length) {
         UI.toast('내용이나 파일을 하나 이상 게시해 주세요.', 'error');
         return;
@@ -805,6 +835,7 @@
         var files = await window.LearnFiles.toPayload(picker.files());
         await API.request('upsertBoardPost', {
           boardId: board.id,
+          title: title,
           text: text,
           files: files,
           keepAttachmentIds: picker.keepAttachmentIds()
@@ -859,10 +890,11 @@
         '<div class="meta-line"><span>게시 ' + UI.escape(UI.date(post.createdAt, true)) + '</span>' +
           (post.updatedAt !== post.createdAt ? '<span>수정 ' + UI.escape(UI.date(post.updatedAt, true)) + '</span>' : '') +
         '</div>' +
+        '<h3 class="board-post-detail-title">' + UI.escape(post.title || '제목 없는 글') + '</h3>' +
         '<div class="detail-body">' + (post.text ? UI.nl2br(post.text) : '<span class="muted-text">작성된 글 없이 파일만 게시했어요.</span>') + '</div>' +
         UI.attachmentGallery(post.attachments, 'student', { allowDownload: mine, context: {
-          heading: post.studentNumber + '번 ' + post.studentName + '의 글',
-          meta: board.title,
+          heading: post.title || post.studentNumber + '번 ' + post.studentName + '의 글',
+          meta: post.studentNumber + '번 ' + post.studentName + ' · ' + board.title,
           text: post.text || '',
           edit: mine && board.status === 'open'
             ? { kind: 'board', boardId: board.id, postId: post.id, label: '게시글 수정' }
