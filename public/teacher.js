@@ -138,6 +138,13 @@
           deleteClass(button.dataset.deleteClass, button.dataset.className, button.dataset.classCode, container);
         });
       });
+      container.querySelectorAll('[data-edit-class]').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+          event.stopPropagation();
+          var item = data.classes.find(function (entry) { return entry.id === button.dataset.editClass; });
+          if (item) openClassMetadataEditor(item, function () { renderDashboard(container, true); });
+        });
+      });
       bindDashboardGuestRooms(container);
       container.querySelectorAll('[data-class-sort]').forEach(function (button) {
         button.addEventListener('click', function () {
@@ -391,9 +398,10 @@
       '<div class="class-card-top"><span class="class-code">' + UI.escape(item.code) + '</span>' + orderControls + '</div>' +
       '<h2>' + UI.escape(item.name) + '</h2>' +
       '<p>' + UI.escape([item.school, item.subject].filter(Boolean).join(' · ') || '수업 정보 없음') + '</p>' +
-      '<div class="class-meta"><span>학생 ' + UI.escape(item.studentCount || 0) + '명</span>' +
+      '<div class="class-meta"><span>학생 ' + UI.escape(item.studentCount || 0) + '명</span><div class="class-card-actions" data-class-action>' +
+        '<button class="text-link" type="button" data-edit-class="' + UI.attr(item.id) + '">수정</button>' +
         '<button class="text-link" type="button" data-delete-class="' + UI.attr(item.id) +
-          '" data-class-action data-class-name="' + UI.attr(item.name) + '" data-class-code="' + UI.attr(item.code) + '">삭제</button></div>' +
+          '" data-class-name="' + UI.attr(item.name) + '" data-class-code="' + UI.attr(item.code) + '">삭제</button></div></div>' +
     '</article>';
   }
 
@@ -454,6 +462,39 @@
         UI.toast(error.message, 'error');
         UI.busy(submit, false);
       }
+    });
+  }
+
+  function openClassMetadataEditor(item, onSaved) {
+    var dialog = UI.modal({
+      title: '클래스 정보 수정',
+      html: '<form class="form-stack" data-class-edit-form>' +
+        '<div class="form-row"><div class="field"><label for="edit-class-name">클래스 이름</label>' +
+          '<input id="edit-class-name" name="name" required maxlength="40" value="' + UI.attr(item.name || '') + '"></div>' +
+          '<div class="field"><label for="edit-class-subject">과목</label><input id="edit-class-subject" name="subject" maxlength="30" value="' + UI.attr(item.subject || '') + '"></div></div>' +
+        '<div class="field"><label for="edit-class-school">학교명</label><input id="edit-class-school" name="school" maxlength="50" value="' + UI.attr(item.school || '') + '"></div>' +
+        '<div class="field"><label>클래스 코드</label><div class="locked-code">' + UI.escape(item.code) + '<span>학생 로그인과 자료 연결을 위해 변경할 수 없어요.</span></div></div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">수정 저장</button></div></form>'
+    });
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-class-edit-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var values = new FormData(form);
+      var button = form.querySelector('[type="submit"]');
+      UI.busy(button, true, '저장 중…');
+      try {
+        var updated = await API.request('updateClass', {
+          classId: item.id,
+          name: String(values.get('name') || '').trim(),
+          subject: String(values.get('subject') || '').trim(),
+          school: String(values.get('school') || '').trim()
+        }, 'teacher');
+        UI.closeModal();
+        dashboardData = null;
+        UI.toast('클래스 정보를 수정했습니다.');
+        if (onSaved) onSaved(updated);
+      } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
     });
   }
 
@@ -541,7 +582,8 @@
                   '<p>' + UI.escape([classData.classInfo.school, classData.classInfo.subject].filter(Boolean).join(' · ')) +
                   ' · 클래스 코드 <strong>' + UI.escape(classData.classInfo.code) + '</strong></p></div>' +
               '</div>' +
-              '<div class="inline-actions"><button class="button secondary small" type="button" data-share-student-link>학생 링크 공유</button>' +
+              '<div class="inline-actions"><button class="button secondary small" type="button" data-edit-current-class>클래스 정보 수정</button>' +
+                '<button class="button secondary small" type="button" data-share-student-link>학생 링크 공유</button>' +
                 '<button class="button secondary small" type="button" data-copy-code>코드 복사</button>' +
                 '<button class="button secondary small" type="button" data-open-timer>⏱ 타이머</button>' +
                 '<button class="button small" type="button" data-refresh>새로고침</button></div>' +
@@ -573,6 +615,12 @@
     });
     container.querySelector('[data-share-student-link]').addEventListener('click', function () {
       shareStudentLink(classData.classInfo);
+    });
+    container.querySelector('[data-edit-current-class]').addEventListener('click', function () {
+      openClassMetadataEditor(classData.classInfo, function (updated) {
+        classData.classInfo = updated;
+        paintClass(container, classId, tab);
+      });
     });
     container.querySelector('[data-refresh]').addEventListener('click', function () {
       renderClass(container, classId, tab, true);
@@ -1792,11 +1840,28 @@
 
   function teacherGuestPostCard(post) {
     return '<article class="guest-feed-card">' +
-      '<div class="guest-feed-meta"><span>익명 참여자</span><time>' + UI.escape(UI.date(post.updatedAt, true)) + '</time></div>' +
+      '<div class="guest-feed-meta"><span>' + (post.teacher ? '선생님' : '익명 참여자') + '</span><time>' + UI.escape(UI.date(post.updatedAt, true)) + '</time></div>' +
       (post.text ? '<p>' + UI.nl2br(post.text) + '</p>' : '') +
       UI.attachmentGallery(post.attachments || [], 'teacher', { maxItems: 6, allowDownload: true }) +
-      '<div class="guest-feed-actions"><button class="text-link danger" type="button" data-delete-guest-post="' + UI.attr(post.id) + '">삭제</button></div>' +
+      '<div class="guest-feed-actions">' + (post.mine ? '<button class="text-link" type="button" data-edit-teacher-guest-post="' + UI.attr(post.id) + '">수정</button>' : '') +
+        '<button class="text-link danger" type="button" data-delete-guest-post="' + UI.attr(post.id) + '">삭제</button></div>' +
     '</article>';
+  }
+
+  function teacherGuestCompose(room, tab) {
+    if (room.status !== 'open') return '<div class="room-closed-note">참여가 마감되어 새 글이나 파일을 올릴 수 없어요.</div>';
+    if (tab === 'board') {
+      return '<div class="guest-compose board teacher-compose"><div><strong>선생님 자료 올리기</strong><span>강의 자료, 사진, PDF, Word 파일과 설명을 함께 공유할 수 있어요.</span></div>' +
+        '<button class="button" type="button" data-new-teacher-board>＋ 글·파일 올리기</button></div>';
+    }
+    if (tab === 'cloud') {
+      return '<form class="guest-compose inline teacher-compose" data-new-teacher-guest-post><input type="hidden" name="kind" value="word">' +
+        '<label for="teacher-guest-word">선생님 아이디어 추가</label><div><input id="teacher-guest-word" name="text" maxlength="30" required placeholder="예: 존중">' +
+        '<button class="button" type="submit">구름에 올리기</button></div></form>';
+    }
+    return '<form class="guest-compose inline opinion teacher-compose" data-new-teacher-guest-post><input type="hidden" name="kind" value="opinion">' +
+      '<label for="teacher-guest-opinion">선생님 글 올리기</label><div><textarea id="teacher-guest-opinion" name="text" rows="2" maxlength="800" required placeholder="참여자에게 안내하거나 함께 나눌 글을 적어 주세요."></textarea>' +
+      '<button class="button" type="submit">글 올리기</button></div></form>';
   }
 
   function teacherWordCloud(posts) {
@@ -1809,7 +1874,9 @@
       return '<span class="tone-' + (index % 5) + '" style="font-size:' + size.toFixed(2) + 'rem">' + UI.escape(word) +
         (counts[word] > 1 ? '<small>×' + counts[word] + '</small>' : '') + '</span>';
     }).join('') + '</div><div class="guest-word-list">' + posts.map(function (post) {
-      return '<button class="word-delete-chip" type="button" data-delete-guest-post="' + UI.attr(post.id) + '">' + UI.escape(post.text) + ' <b>×</b></button>';
+      return '<span class="word-delete-chip">' + (post.teacher ? '<strong>선생님 · </strong>' : '') + UI.escape(post.text) +
+        (post.mine ? '<button type="button" data-edit-teacher-guest-post="' + UI.attr(post.id) + '">수정</button>' : '') +
+        '<button type="button" data-delete-guest-post="' + UI.attr(post.id) + '">×</button></span>';
     }).join('') + '</div>';
   }
 
@@ -1835,7 +1902,7 @@
       '<section class="content-panel guest-room-content"><div class="content-panel-head"><div><h2>' +
         UI.escape(tab === 'opinion' ? '익명 의견' : tab === 'board' ? '공유 파일 보드' : '아이디어 구름') + '</h2>' +
         '<p>내용은 자동으로 갱신됩니다. 참여자 이름은 수집하지 않아요.</p></div><button class="button secondary small" type="button" data-refresh-room>새로고침</button></div>' +
-        '<div class="guest-feed ' + UI.attr(tab) + '">' + body + '</div></section></section>';
+        teacherGuestCompose(room, tab) + '<div class="guest-feed ' + UI.attr(tab) + '">' + body + '</div></section></section>';
     container.querySelector('[data-room-back]').addEventListener('click', function () { location.hash = '#/teacher'; });
     container.querySelector('[data-room-qr]').addEventListener('click', function () { openGuestRoomQr(room.code, room.title); });
     container.querySelector('[data-copy-room]').addEventListener('click', function () { copyText(guestRoomUrl(room.code), '참여 링크를 복사했습니다.'); });
@@ -1853,11 +1920,99 @@
         catch (error) { UI.toast(error.message, 'error'); }
       });
     });
+    container.querySelectorAll('[data-new-teacher-guest-post]').forEach(function (form) {
+      form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        var values = new FormData(form);
+        var button = form.querySelector('[type="submit"]');
+        UI.busy(button, true, '올리는 중…');
+        try {
+          await API.request('upsertGuestPost', {
+            roomId: roomId, kind: String(values.get('kind')), text: String(values.get('text') || '').trim()
+          }, 'teacher');
+          await refreshGuestRoomSilently(roomId, true);
+          UI.toast('선생님 글을 올렸습니다.');
+        } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+      });
+    });
+    var newTeacherBoard = container.querySelector('[data-new-teacher-board]');
+    if (newTeacherBoard) newTeacherBoard.addEventListener('click', function () { openTeacherGuestBoardEditor(roomId, null); });
+    container.querySelectorAll('[data-edit-teacher-guest-post]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var post = posts.find(function (item) { return item.id === button.dataset.editTeacherGuestPost; });
+        if (!post) return;
+        if (post.kind === 'board') openTeacherGuestBoardEditor(roomId, post);
+        else openTeacherGuestTextEditor(roomId, post);
+      });
+    });
     UI.bindFiles(container, 'teacher');
   }
 
-  async function refreshGuestRoomSilently(roomId) {
-    if (guestRoomBusy || !guestRoomContainer || !guestRoomContainer.isConnected) return;
+  function teacherGuestUploadFields(post) {
+    return '<div class="field"><label for="teacher-guest-board-text">글 내용</label><textarea id="teacher-guest-board-text" name="text" rows="4" maxlength="2000" placeholder="자료에 대한 안내를 적어 주세요.">' +
+      UI.escape(post && post.text || '') + '</textarea></div>' +
+      '<div class="field"><span class="field-label">첨부파일</span><label class="file-drop" data-file-drop><input type="file" multiple data-file-input>' +
+        '<strong>파일을 끌어놓거나 눌러서 선택</strong><span>파일당 최대 ' + UI.escape((window.LEARN_CONFIG || {}).maxFileSizeMb || 25) + 'MB · 여러 개 선택 가능</span></label>' +
+        '<div class="selected-files" data-selected-files></div></div>';
+  }
+
+  function openTeacherGuestBoardEditor(roomId, post) {
+    var dialog = UI.modal({
+      title: post ? '선생님 게시글 수정' : '글·파일 올리기',
+      html: '<form class="form-stack" data-teacher-guest-board-form>' + teacherGuestUploadFields(post) +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">' +
+          (post ? '수정 저장' : '보드에 올리기') + '</button></div></form>'
+    });
+    var picker = UI.filePicker(dialog, post ? post.attachments : []);
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-teacher-guest-board-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var form = event.currentTarget;
+      var text = String(new FormData(form).get('text') || '').trim();
+      if (!text && !picker.files().length && !picker.keepAttachmentIds().length) {
+        UI.toast('글이나 파일을 하나 이상 올려 주세요.', 'error'); return;
+      }
+      var button = form.querySelector('[type="submit"]');
+      UI.busy(button, true, '파일 저장 중…');
+      try {
+        var files = await window.LearnFiles.toPayload(picker.files());
+        await API.request('upsertGuestPost', {
+          roomId: roomId, kind: 'board', postId: post ? post.id : '', text: text,
+          files: files, keepAttachmentIds: picker.keepAttachmentIds()
+        }, 'teacher', 0);
+        UI.closeModal();
+        await refreshGuestRoomSilently(roomId, true);
+        UI.toast(post ? '선생님 게시글을 수정했습니다.' : '글과 파일을 보드에 올렸습니다.');
+      } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+    });
+  }
+
+  function openTeacherGuestTextEditor(roomId, post) {
+    var isWord = post.kind === 'word';
+    var dialog = UI.modal({
+      title: '선생님 글 수정',
+      html: '<form class="form-stack" data-teacher-guest-text-form><div class="field"><label for="teacher-guest-edit-text">내용</label>' +
+        (isWord ? '<input id="teacher-guest-edit-text" name="text" maxlength="30" required value="' + UI.attr(post.text) + '">' :
+          '<textarea id="teacher-guest-edit-text" name="text" rows="5" maxlength="800" required>' + UI.escape(post.text) + '</textarea>') +
+        '</div><div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">수정 저장</button></div></form>'
+    });
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-teacher-guest-text-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var button = event.currentTarget.querySelector('[type="submit"]');
+      UI.busy(button, true, '저장 중…');
+      try {
+        await API.request('upsertGuestPost', {
+          roomId: roomId, kind: post.kind, postId: post.id,
+          text: String(new FormData(event.currentTarget).get('text') || '').trim()
+        }, 'teacher');
+        UI.closeModal(); await refreshGuestRoomSilently(roomId, true); UI.toast('선생님 글을 수정했습니다.');
+      } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+    });
+  }
+
+  async function refreshGuestRoomSilently(roomId, force) {
+    if ((guestRoomBusy && !force) || !guestRoomContainer || !guestRoomContainer.isConnected) return;
     guestRoomBusy = true;
     var y = window.scrollY;
     try {

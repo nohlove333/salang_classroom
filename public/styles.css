@@ -2300,6 +2300,26 @@ video {
 .content-panel-head h2 { margin: 2px 0 5px; }
 .quick-room-section-head p { margin: 0; color: var(--muted); }
 
+.class-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.locked-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 50px;
+  padding: 12px 15px;
+  border: 1px solid rgba(119, 126, 139, 0.16);
+  border-radius: 14px;
+  background: rgba(238, 239, 241, 0.72);
+  font-weight: 800;
+}
+.locked-code span { color: var(--muted); font-size: 0.78rem; font-weight: 500; }
+
 .quick-room-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2403,6 +2423,10 @@ video {
 .guest-compose.inline input,
 .guest-compose.inline textarea { flex: 1; min-width: 0; }
 .guest-compose.inline textarea { resize: vertical; }
+.teacher-compose {
+  border-color: rgba(200, 126, 151, 0.25);
+  background: rgba(255, 249, 251, 0.74);
+}
 
 .guest-feed { display: grid; gap: 15px; }
 .guest-feed.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2456,6 +2480,15 @@ video {
 }
 .my-word-list button { border: 0; background: transparent; color: var(--rose); cursor: pointer; }
 .word-delete-chip { cursor: pointer; }
+.word-delete-chip button {
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--rose);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
 .room-closed-note {
   margin-bottom: 20px;
   padding: 17px 20px;

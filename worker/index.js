@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-11-v39';
+const RELEASE = '2026-10-11-v40';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -506,6 +506,7 @@ function guestPostJson(row, viewerId = '') {
     kind: row.kind,
     text: row.text || '',
     mine: Boolean(viewerId && row.participant_id === viewerId),
+    teacher: String(row.participant_id || '').startsWith('teacher:'),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     attachments: []
@@ -839,7 +840,7 @@ async function joinGuestRoom(env, payload) {
 }
 
 async function getTeacherGuestRoom(env, session, payload) {
-  return guestRoomData(env, await ownedGuestRoom(env, session, payload.roomId));
+  return guestRoomData(env, await ownedGuestRoom(env, session, payload.roomId), `teacher:${session.user_id}`);
 }
 
 async function getGuestRoom(env, session) {
@@ -859,7 +860,21 @@ async function requireOpenGuestRoom(env, session) {
 }
 
 async function upsertGuestPost(env, session, payload) {
-  const room = await requireOpenGuestRoom(env, session);
+  let room;
+  let participantId;
+  if (session.role === 'teacher') {
+    room = await ownedGuestRoom(env, session, payload.roomId);
+    participantId = `teacher:${session.user_id}`;
+    const visibleRoom = guestRoomJson(room);
+    if (visibleRoom.status !== 'open') {
+      throw new AppError(visibleRoom.status === 'expired' ? '이 참여방의 이용 시간이 끝났어요.' : '참여를 마감한 방에는 새 글을 올릴 수 없어요.', 'ROOM_CLOSED', 410);
+    }
+  } else if (session.role === 'guest') {
+    room = await requireOpenGuestRoom(env, session);
+    participantId = session.user_id;
+  } else {
+    throw new AppError('참여방 글 작성 권한이 없습니다.', 'FORBIDDEN', 403);
+  }
   const kind = String(payload.kind || 'opinion');
   if (!['opinion', 'board', 'word'].includes(kind)) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
   const maxLength = kind === 'word' ? 30 : (kind === 'opinion' ? 800 : 2000);
@@ -872,7 +887,7 @@ async function upsertGuestPost(env, session, payload) {
   if (postId) {
     row = await env.DB.prepare(
       'SELECT * FROM guest_posts WHERE id=? AND room_id=? AND participant_id=?'
-    ).bind(postId, room.id, session.user_id).first();
+    ).bind(postId, room.id, participantId).first();
     if (!row) throw new AppError('내 글만 수정할 수 있습니다.', 'FORBIDDEN', 403);
     if (row.kind !== kind) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
     await env.DB.prepare('UPDATE guest_posts SET text=?,updated_at=? WHERE id=?')
@@ -882,14 +897,14 @@ async function upsertGuestPost(env, session, payload) {
     row = { id: uid('gpost') };
     await env.DB.prepare(
       'INSERT INTO guest_posts(id,room_id,participant_id,kind,text,created_at,updated_at) VALUES(?,?,?,?,?,?,?)'
-    ).bind(row.id, room.id, session.user_id, kind, text, created, created).run();
+    ).bind(row.id, room.id, participantId, kind, text, created, created).run();
   }
   const attachments = await replaceAttachments(
     env, 'guest_post', row.id, keptFiles, uploadedFiles, session
   );
   await touchGuestRoom(env, room.id);
   const saved = await env.DB.prepare('SELECT * FROM guest_posts WHERE id=?').bind(row.id).first();
-  const result = guestPostJson(saved, session.user_id);
+  const result = guestPostJson(saved, participantId);
   result.attachments = attachments;
   return result;
 }
@@ -970,6 +985,18 @@ async function createClass(env, session, payload) {
   ).bind(id, session.user_id, name, String(payload.subject || '').trim(), String(payload.school || '').trim(), code,
     Number(orderRow.next_order || 1), created, created).run();
   return classJson(await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(id).first());
+}
+
+async function updateClass(env, session, payload) {
+  const row = await ownedClass(env, session, payload.classId);
+  const name = String(payload.name || '').trim().slice(0, 40);
+  const subject = String(payload.subject || '').trim().slice(0, 30);
+  const school = String(payload.school || '').trim().slice(0, 50);
+  if (!name) throw new AppError('클래스 이름을 입력해 주세요.', 'INVALID_CLASS');
+  await env.DB.prepare(
+    'UPDATE classes SET name=?,subject=?,school=?,version=version+1,updated_at=? WHERE id=? AND teacher_id=?'
+  ).bind(name, subject, school, nowIso(), row.id, session.user_id).run();
+  return classJson(await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(row.id).first());
 }
 
 async function reorderClasses(env, session, payload) {
@@ -1661,14 +1688,14 @@ async function handleAction(request, env) {
   if (!(await schemaReady(env))) throw new AppError('먼저 교사 계정을 만들어 주세요.', 'SETUP_REQUIRED', 404);
   if (action === 'joinGuestRoom') return joinGuestRoom(env, payload);
   const teacherActions = new Set([
-    'teacherDashboard', 'createClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
+    'teacherDashboard', 'createClass', 'updateClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
     'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
     'createGuestRoom', 'getTeacherGuestRoom', 'closeGuestRoom', 'deleteGuestRoom'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
-  const guestActions = new Set(['getGuestRoom', 'upsertGuestPost', 'guestHeartbeat']);
+  const guestActions = new Set(['getGuestRoom', 'guestHeartbeat']);
   let role = '';
   if (teacherActions.has(action)) role = 'teacher';
   else if (studentActions.has(action)) role = 'student';
@@ -1679,6 +1706,7 @@ async function handleAction(request, env) {
     case 'teacherDashboard': return teacherDashboard(env, session);
     case 'getStorageStatus': return fileStorageStatus(env);
     case 'createClass': return createClass(env, session, payload);
+    case 'updateClass': return updateClass(env, session, payload);
     case 'reorderClasses': return reorderClasses(env, session, payload);
     case 'deleteClass': return deleteClass(env, session, payload);
     case 'getTeacherClass':

@@ -63,7 +63,7 @@
 
   function postCard(post) {
     return '<article class="guest-feed-card ' + (post.mine ? 'mine' : '') + '">' +
-      '<div class="guest-feed-meta"><span>' + (post.mine ? '내가 올린 글' : '익명 참여자') + '</span><time>' + UI.escape(UI.date(post.updatedAt, true)) + '</time></div>' +
+      '<div class="guest-feed-meta"><span>' + (post.teacher ? '선생님' : (post.mine ? '내가 올린 글' : '익명 참여자')) + '</span><time>' + UI.escape(UI.date(post.updatedAt, true)) + '</time></div>' +
       (post.text ? '<p>' + UI.nl2br(post.text) + '</p>' : '') +
       UI.attachmentGallery(post.attachments || [], 'guest', { maxItems: 6, allowDownload: post.mine }) +
       (post.mine ? '<div class="guest-feed-actions"><button class="text-link" type="button" data-edit-guest-post="' + UI.attr(post.id) + '">수정</button>' +
