@@ -2327,6 +2327,52 @@ video {
   margin-top: 22px;
 }
 
+.quick-room-collection {
+  margin-top: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(119, 126, 139, 0.14);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.4);
+}
+.quick-room-collection > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.quick-room-collection > summary::-webkit-details-marker { display: none; }
+.quick-room-collection > summary:hover { background: rgba(255, 255, 255, 0.44); }
+.quick-room-collection > summary strong { font-size: 0.96rem; }
+.quick-room-collection > summary span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(230, 234, 239, 0.74);
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.quick-room-collection > summary b {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(237, 239, 242, 0.82);
+  font-size: 1rem;
+  transition: transform 160ms ease;
+}
+.quick-room-collection[open] > summary b { transform: rotate(180deg); }
+.quick-room-collection-body {
+  padding: 0 18px 18px;
+  border-top: 1px solid rgba(119, 126, 139, 0.1);
+}
+.quick-room-collection .quick-room-grid,
+.quick-room-collection .quick-room-empty { margin-top: 18px; }
+
 .quick-room-card {
   min-height: 210px;
   padding: 22px;
@@ -2537,6 +2583,77 @@ video {
 }
 .guest-teacher-notice .guest-feed-card:first-child:last-child { min-height: 0; }
 
+/* v44 · 여러 파일 보드, 참여방 목록 접기, 게시글 제목 */
+.guest-board-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 19px;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: 0 10px 28px rgba(70, 75, 86, 0.05);
+  backdrop-filter: blur(15px);
+}
+.guest-board-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.guest-board-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid rgba(119, 126, 139, 0.16);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 760;
+  cursor: pointer;
+}
+.guest-board-chip b {
+  min-width: 22px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(230, 234, 239, 0.78);
+  font-size: 0.72rem;
+  text-align: center;
+}
+.guest-board-chip.active {
+  border-color: rgba(106, 139, 154, 0.34);
+  background: rgba(228, 241, 245, 0.9);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.58);
+}
+.guest-board-manage {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+.guest-post-title {
+  margin: 16px 0 5px;
+  color: var(--ink);
+  font-size: 1.08rem;
+  font-weight: 820;
+  line-height: 1.45;
+}
+.guest-post-title + p { margin-top: 9px; }
+.teacher-notice-compose-fields { display: grid; gap: 10px; }
+.teacher-notice-compose-fields input,
+.teacher-notice-compose-fields textarea { width: 100%; }
+.teacher-notice-compose-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+
 .guest-feed { display: grid; gap: 15px; }
 .guest-feed.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .guest-feed-card {
@@ -2625,6 +2742,10 @@ video {
   .guest-compose.inline .button { width: 100%; }
   .guest-room-tabs { overflow-x: auto; justify-content: flex-start; }
   .guest-room-tabs .tab-button { flex: 0 0 auto; min-width: 122px; }
+  .quick-room-collection-body { padding: 0 12px 12px; }
+  .guest-board-toolbar { align-items: stretch; flex-direction: column; padding: 10px; }
+  .guest-board-manage { flex-wrap: wrap; }
+  .guest-board-manage .button { flex: 1 1 auto; }
   .guest-word-cloud { min-height: 270px; padding: 28px 18px; }
   .board-teacher-notice summary {
     grid-template-columns: auto minmax(0, 1fr) auto;

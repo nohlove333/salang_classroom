@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-11-v43';
+const RELEASE = '2026-10-11-v44';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 
@@ -138,11 +138,24 @@ CREATE TABLE IF NOT EXISTS guest_rooms (
   FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS guest_rooms_teacher_created ON guest_rooms(teacher_id, created_at);
+CREATE TABLE IF NOT EXISTS guest_boards (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(room_id, title),
+  FOREIGN KEY (room_id) REFERENCES guest_rooms(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS guest_boards_room_order ON guest_boards(room_id, display_order, created_at);
 CREATE TABLE IF NOT EXISTS guest_posts (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL,
   participant_id TEXT NOT NULL,
   kind TEXT NOT NULL,
+  board_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -328,6 +341,7 @@ async function ensureSchema(env) {
     }
   }
   await ensureBoardPostTitleSchema(env);
+  await ensureGuestBoardSchema(env);
   featureSchemaVerified = true;
 }
 
@@ -341,6 +355,31 @@ async function ensureBoardPostTitleSchema(env) {
   }
 }
 
+async function ensureGuestBoardSchema(env) {
+  await env.DB.prepare(
+    'CREATE TABLE IF NOT EXISTS guest_boards (' +
+      'id TEXT PRIMARY KEY,room_id TEXT NOT NULL,title TEXT NOT NULL,display_order INTEGER NOT NULL DEFAULT 0,' +
+      'created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(room_id,title),' +
+      'FOREIGN KEY (room_id) REFERENCES guest_rooms(id) ON DELETE CASCADE)'
+  ).run();
+  await env.DB.prepare('CREATE INDEX IF NOT EXISTS guest_boards_room_order ON guest_boards(room_id,display_order,created_at)').run();
+  const columns = await all(env.DB.prepare('PRAGMA table_info(guest_posts)'));
+  if (!columns.some((column) => column.name === 'board_id')) {
+    try {
+      await env.DB.prepare("ALTER TABLE guest_posts ADD COLUMN board_id TEXT NOT NULL DEFAULT ''").run();
+    } catch (error) {
+      if (!String(error && error.message || '').includes('duplicate column name')) throw error;
+    }
+  }
+  if (!columns.some((column) => column.name === 'title')) {
+    try {
+      await env.DB.prepare("ALTER TABLE guest_posts ADD COLUMN title TEXT NOT NULL DEFAULT ''").run();
+    } catch (error) {
+      if (!String(error && error.message || '').includes('duplicate column name')) throw error;
+    }
+  }
+}
+
 async function schemaReady(env) {
   try {
     const row = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='teachers'").first();
@@ -350,7 +389,10 @@ async function schemaReady(env) {
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
       ));
       if (featureTables.length < 4) await ensureSchema(env);
-      else await ensureBoardPostTitleSchema(env);
+      else {
+        await ensureBoardPostTitleSchema(env);
+        await ensureGuestBoardSchema(env);
+      }
       featureSchemaVerified = true;
     }
     return true;
@@ -513,11 +555,24 @@ function guestRoomJson(row) {
   };
 }
 
+function guestBoardJson(row) {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    title: row.title,
+    displayOrder: Number(row.display_order || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
 function guestPostJson(row, viewerId = '') {
   return {
     id: row.id,
     roomId: row.room_id,
     kind: row.kind,
+    boardId: row.board_id || '',
+    title: row.title || '',
     text: row.text || '',
     mine: Boolean(viewerId && row.participant_id === viewerId),
     teacher: String(row.participant_id || '').startsWith('teacher:'),
@@ -800,6 +855,7 @@ async function touchGuestRoom(env, roomId) {
 }
 
 async function guestRoomData(env, roomRow, viewerId = '') {
+  const boards = await ensureDefaultGuestBoard(env, roomRow.id);
   const rows = await all(env.DB.prepare(
     'SELECT * FROM guest_posts WHERE room_id=? ORDER BY created_at,id'
   ).bind(roomRow.id));
@@ -816,7 +872,32 @@ async function guestRoomData(env, roomRow, viewerId = '') {
     item.attachments = files.get(row.id) || [];
     return item;
   });
-  return { room: guestRoomJson(roomRow), posts };
+  return { room: guestRoomJson(roomRow), boards: boards.map(guestBoardJson), posts };
+}
+
+async function ensureDefaultGuestBoard(env, roomId) {
+  let rows = await all(env.DB.prepare(
+    'SELECT * FROM guest_boards WHERE room_id=? ORDER BY display_order,created_at,id'
+  ).bind(roomId));
+  if (!rows.length) {
+    const created = nowIso();
+    try {
+      await env.DB.prepare(
+        'INSERT INTO guest_boards(id,room_id,title,display_order,created_at,updated_at) VALUES(?,?,?,?,?,?)'
+      ).bind(uid('gboard'), roomId, '파일 보드', 1, created, created).run();
+    } catch (error) {
+      if (!String(error && error.message || '').includes('UNIQUE constraint failed')) throw error;
+    }
+    rows = await all(env.DB.prepare(
+      'SELECT * FROM guest_boards WHERE room_id=? ORDER BY display_order,created_at,id'
+    ).bind(roomId));
+  }
+  const defaultBoard = rows[0];
+  if (defaultBoard) {
+    await env.DB.prepare("UPDATE guest_posts SET board_id=? WHERE room_id=? AND kind='board' AND (board_id='' OR board_id IS NULL)")
+      .bind(defaultBoard.id, roomId).run();
+  }
+  return rows;
 }
 
 async function createGuestRoom(env, session, payload) {
@@ -863,6 +944,63 @@ async function getGuestRoom(env, session) {
   return guestRoomData(env, row, session.user_id);
 }
 
+async function createGuestBoard(env, session, payload) {
+  const room = await ownedGuestRoom(env, session, payload.roomId);
+  const title = String(payload.title || '').trim().slice(0, 50);
+  if (!title) throw new AppError('보드 이름을 입력해 주세요.', 'INVALID_TITLE');
+  const count = Number((await env.DB.prepare('SELECT COUNT(*) AS total FROM guest_boards WHERE room_id=?').bind(room.id).first()).total || 0);
+  if (count >= 20) throw new AppError('한 참여방에는 파일 보드를 20개까지 만들 수 있습니다.', 'BOARD_LIMIT');
+  const orderRow = await env.DB.prepare('SELECT COALESCE(MAX(display_order),0) AS last_order FROM guest_boards WHERE room_id=?').bind(room.id).first();
+  const created = nowIso();
+  const id = uid('gboard');
+  try {
+    await env.DB.prepare(
+      'INSERT INTO guest_boards(id,room_id,title,display_order,created_at,updated_at) VALUES(?,?,?,?,?,?)'
+    ).bind(id, room.id, title, Number(orderRow.last_order || 0) + 1, created, created).run();
+  } catch (error) {
+    if (String(error && error.message || '').includes('UNIQUE constraint failed')) {
+      throw new AppError('같은 이름의 파일 보드가 이미 있습니다.', 'DUPLICATE_BOARD', 409);
+    }
+    throw error;
+  }
+  await touchGuestRoom(env, room.id);
+  return guestBoardJson(await env.DB.prepare('SELECT * FROM guest_boards WHERE id=?').bind(id).first());
+}
+
+async function updateGuestBoard(env, session, payload) {
+  const board = await env.DB.prepare('SELECT * FROM guest_boards WHERE id=?').bind(String(payload.boardId || '')).first();
+  if (!board) throw new AppError('파일 보드를 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  await ownedGuestRoom(env, session, board.room_id);
+  const title = String(payload.title || '').trim().slice(0, 50);
+  if (!title) throw new AppError('보드 이름을 입력해 주세요.', 'INVALID_TITLE');
+  try {
+    await env.DB.prepare('UPDATE guest_boards SET title=?,updated_at=? WHERE id=?').bind(title, nowIso(), board.id).run();
+  } catch (error) {
+    if (String(error && error.message || '').includes('UNIQUE constraint failed')) {
+      throw new AppError('같은 이름의 파일 보드가 이미 있습니다.', 'DUPLICATE_BOARD', 409);
+    }
+    throw error;
+  }
+  await touchGuestRoom(env, board.room_id);
+  return guestBoardJson(await env.DB.prepare('SELECT * FROM guest_boards WHERE id=?').bind(board.id).first());
+}
+
+async function deleteGuestBoard(env, session, payload) {
+  const board = await env.DB.prepare('SELECT * FROM guest_boards WHERE id=?').bind(String(payload.boardId || '')).first();
+  if (!board) return { deleted: true };
+  await ownedGuestRoom(env, session, board.room_id);
+  const count = Number((await env.DB.prepare('SELECT COUNT(*) AS total FROM guest_boards WHERE room_id=?').bind(board.room_id).first()).total || 0);
+  if (count <= 1) throw new AppError('파일 보드는 최소 1개가 필요합니다.', 'LAST_BOARD');
+  const posts = await all(env.DB.prepare("SELECT id FROM guest_posts WHERE room_id=? AND kind='board' AND board_id=?").bind(board.room_id, board.id));
+  await deleteOwnerFiles(env, 'guest_post', posts.map((item) => item.id));
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM guest_posts WHERE room_id=? AND kind='board' AND board_id=?").bind(board.room_id, board.id),
+    env.DB.prepare('DELETE FROM guest_boards WHERE id=?').bind(board.id)
+  ]);
+  await touchGuestRoom(env, board.room_id);
+  return { deleted: true };
+}
+
 async function requireOpenGuestRoom(env, session) {
   const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(session.class_id).first();
   if (!row) throw new AppError('참여방을 찾을 수 없습니다.', 'ROOM_NOT_FOUND', 404);
@@ -892,10 +1030,14 @@ async function upsertGuestPost(env, session, payload) {
   const kind = String(payload.kind || 'opinion');
   if (!['opinion', 'board', 'word'].includes(kind)) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
   const maxLength = kind === 'word' ? 30 : (kind === 'opinion' ? 800 : 2000);
+  const title = String(payload.title || '').trim().slice(0, 100);
   const text = String(payload.text || '').trim().slice(0, maxLength);
   const uploadedFiles = kind === 'board' ? (payload.files || []) : [];
   const keptFiles = kind === 'board' ? (payload.keepAttachmentIds || []) : [];
   if (!text && !uploadedFiles.length && !keptFiles.length) throw new AppError(kind === 'board' ? '글이나 파일을 올려 주세요.' : '내용을 입력해 주세요.', 'EMPTY_POST');
+  if ((kind === 'board' || (kind === 'opinion' && session.role === 'teacher')) && !title) {
+    throw new AppError(kind === 'board' ? '게시글 제목을 입력해 주세요.' : '공지 제목을 입력해 주세요.', 'INVALID_TITLE');
+  }
   let row = null;
   const postId = String(payload.postId || '');
   if (postId) {
@@ -904,14 +1046,23 @@ async function upsertGuestPost(env, session, payload) {
     ).bind(postId, room.id, participantId).first();
     if (!row) throw new AppError('내 글만 수정할 수 있습니다.', 'FORBIDDEN', 403);
     if (row.kind !== kind) throw new AppError('글 종류가 올바르지 않습니다.', 'INVALID_TYPE');
-    await env.DB.prepare('UPDATE guest_posts SET text=?,updated_at=? WHERE id=?')
-      .bind(text, nowIso(), row.id).run();
+  }
+  let boardId = '';
+  if (kind === 'board') {
+    const defaultBoards = await ensureDefaultGuestBoard(env, room.id);
+    boardId = String(payload.boardId || (row && row.board_id) || (defaultBoards[0] && defaultBoards[0].id) || '');
+    const board = await env.DB.prepare('SELECT id FROM guest_boards WHERE id=? AND room_id=?').bind(boardId, room.id).first();
+    if (!board) throw new AppError('파일 보드를 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  }
+  if (row) {
+    await env.DB.prepare('UPDATE guest_posts SET board_id=?,title=?,text=?,updated_at=? WHERE id=?')
+      .bind(boardId, title, text, nowIso(), row.id).run();
   } else {
     const created = nowIso();
     row = { id: uid('gpost') };
     await env.DB.prepare(
-      'INSERT INTO guest_posts(id,room_id,participant_id,kind,text,created_at,updated_at) VALUES(?,?,?,?,?,?,?)'
-    ).bind(row.id, room.id, participantId, kind, text, created, created).run();
+      'INSERT INTO guest_posts(id,room_id,participant_id,kind,board_id,title,text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)'
+    ).bind(row.id, room.id, participantId, kind, boardId, title, text, created, created).run();
   }
   const attachments = await replaceAttachments(
     env, 'guest_post', row.id, keptFiles, uploadedFiles, session
@@ -962,6 +1113,7 @@ async function deleteGuestRoom(env, session, payload) {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM sessions WHERE role='guest' AND class_id=?").bind(row.id),
     env.DB.prepare('DELETE FROM guest_posts WHERE room_id=?').bind(row.id),
+    env.DB.prepare('DELETE FROM guest_boards WHERE room_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM guest_rooms WHERE id=?').bind(row.id)
   ]);
   return { deleted: true };
@@ -1717,7 +1869,8 @@ async function handleAction(request, env) {
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
     'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
-    'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'deleteGuestRoom'
+    'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'deleteGuestRoom',
+    'createGuestBoard', 'updateGuestBoard', 'deleteGuestBoard'
   ]);
   const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
   const guestActions = new Set(['getGuestRoom', 'guestHeartbeat']);
@@ -1761,6 +1914,9 @@ async function handleAction(request, env) {
     case 'createGuestRoom': return createGuestRoom(env, session, payload);
     case 'getTeacherGuestRoom': return getTeacherGuestRoom(env, session, payload);
     case 'updateGuestRoom': return updateGuestRoom(env, session, payload);
+    case 'createGuestBoard': return createGuestBoard(env, session, payload);
+    case 'updateGuestBoard': return updateGuestBoard(env, session, payload);
+    case 'deleteGuestBoard': return deleteGuestBoard(env, session, payload);
     case 'getGuestRoom': return getGuestRoom(env, session);
     case 'upsertGuestPost': return upsertGuestPost(env, session, payload);
     case 'deleteGuestPost': return deleteGuestPost(env, session, payload);
