@@ -1,8 +1,9 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-11-v44';
+const RELEASE = '2026-10-12-v45';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
+let featureSchemaError = '';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -385,18 +386,25 @@ async function schemaReady(env) {
     const row = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='teachers'").first();
     if (!row) return false;
     if (!featureSchemaVerified) {
-      const featureTables = await all(env.DB.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
-      ));
-      if (featureTables.length < 4) await ensureSchema(env);
-      else {
-        await ensureBoardPostTitleSchema(env);
-        await ensureGuestBoardSchema(env);
+      try {
+        const featureTables = await all(env.DB.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
+        ));
+        if (featureTables.length < 4) await ensureSchema(env);
+        else {
+          await ensureBoardPostTitleSchema(env);
+          await ensureGuestBoardSchema(env);
+        }
+        featureSchemaVerified = true;
+        featureSchemaError = '';
+      } catch (error) {
+        featureSchemaError = String(error && error.message || '기능 데이터베이스 업데이트 실패').slice(0, 240);
+        console.error('Optional feature schema upgrade failed:', error);
       }
-      featureSchemaVerified = true;
     }
     return true;
-  } catch (_) {
+  } catch (error) {
+    console.error('Core database check failed:', error);
     return false;
   }
 }
@@ -2041,7 +2049,15 @@ export default {
         return guestRoomQr(request);
       }
       if (url.pathname === '/api/health') {
-        return ok({ status: 'ok', databaseReady: await schemaReady(env), provider: 'cloudflare', release: RELEASE }, request);
+        const databaseReady = await schemaReady(env);
+        return ok({
+          status: 'ok',
+          databaseReady,
+          featureSchemaReady: databaseReady && featureSchemaVerified,
+          databaseIssue: databaseReady && featureSchemaError ? featureSchemaError : '',
+          provider: 'cloudflare',
+          release: RELEASE
+        }, request);
       }
       if (url.pathname === '/api/upload' && request.method === 'POST') {
         return ok(await handleUpload(request, env), request);
