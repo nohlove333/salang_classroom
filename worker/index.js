@@ -1,9 +1,13 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-12-v45';
+const RELEASE = '2026-10-12-v46';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
+let coreSchemaCheckedAt = 0;
+let schemaCheckPromise = null;
+const presenceUpdates = new Map();
+const initializedGuestRooms = new Set();
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -316,6 +320,12 @@ function ok(data, request) {
 }
 
 function errorResponse(error, request) {
+  const causeMessage = String(error && error.message || '');
+  if (/exceeded.*(?:daily|free tier).*limit|daily.*(?:row read|row write).*limit/i.test(causeMessage)) {
+    const retryAt = new Date();
+    retryAt.setUTCHours(24, 0, 0, 0);
+    return json({ ok: false, code: 'DAILY_LIMIT_EXCEEDED', message: '오늘의 무료 사용 한도에 도달했습니다. 한국 시간 다음 오전 9시 이후 다시 시도해 주세요.', details: { retryAt: retryAt.toISOString() } }, 429, request);
+  }
   if (error instanceof AppError) {
     return json({ ok: false, code: error.code, message: error.message, details: error.details }, error.status, request);
   }
@@ -381,7 +391,7 @@ async function ensureGuestBoardSchema(env) {
   }
 }
 
-async function schemaReady(env) {
+async function checkSchema(env) {
   try {
     const row = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='teachers'").first();
     if (!row) return false;
@@ -402,11 +412,21 @@ async function schemaReady(env) {
         console.error('Optional feature schema upgrade failed:', error);
       }
     }
+    coreSchemaCheckedAt = Date.now();
     return true;
   } catch (error) {
+    if (/exceeded.*(?:daily|free tier).*limit|daily.*(?:row read|row write).*limit/i.test(String(error && error.message || ''))) throw error;
     console.error('Core database check failed:', error);
     return false;
   }
+}
+
+async function schemaReady(env) {
+  if (coreSchemaCheckedAt && Date.now() - coreSchemaCheckedAt < 60000) return true;
+  if (!schemaCheckPromise) {
+    schemaCheckPromise = checkSchema(env).finally(() => { schemaCheckPromise = null; });
+  }
+  return schemaCheckPromise;
 }
 
 async function issueSession(env, role, userId, classId = '', expiresAt = '') {
@@ -901,9 +921,11 @@ async function ensureDefaultGuestBoard(env, roomId) {
     ).bind(roomId));
   }
   const defaultBoard = rows[0];
-  if (defaultBoard) {
+  if (defaultBoard && !initializedGuestRooms.has(roomId)) {
     await env.DB.prepare("UPDATE guest_posts SET board_id=? WHERE room_id=? AND kind='board' AND (board_id='' OR board_id IS NULL)")
       .bind(defaultBoard.id, roomId).run();
+    if (initializedGuestRooms.size >= 1000) initializedGuestRooms.clear();
+    initializedGuestRooms.add(roomId);
   }
   return rows;
 }
@@ -943,12 +965,15 @@ async function joinGuestRoom(env, payload) {
 }
 
 async function getTeacherGuestRoom(env, session, payload) {
-  return guestRoomData(env, await ownedGuestRoom(env, session, payload.roomId), `teacher:${session.user_id}`);
+  const row = await ownedGuestRoom(env, session, payload.roomId);
+  if (Number(payload.knownVersion) === Number(row.version || 1)) return { room: guestRoomJson(row), unchanged: true };
+  return guestRoomData(env, row, `teacher:${session.user_id}`);
 }
 
-async function getGuestRoom(env, session) {
+async function getGuestRoom(env, session, payload = {}) {
   const row = await env.DB.prepare('SELECT * FROM guest_rooms WHERE id=?').bind(session.class_id).first();
   if (!row) throw new AppError('참여방을 찾을 수 없습니다.', 'ROOM_NOT_FOUND', 404);
+  if (Number(payload.knownVersion) === Number(row.version || 1)) return { room: guestRoomJson(row), unchanged: true };
   return guestRoomData(env, row, session.user_id);
 }
 
@@ -1550,15 +1575,23 @@ async function clearClassTimer(env, session, payload) {
 async function heartbeat(env, session, payload) {
   const classId = session.role === 'student' ? session.class_id : String(payload.classId || '');
   if (session.role === 'student') {
-    await env.DB.prepare('UPDATE students SET last_seen_at=? WHERE id=? AND class_id=?')
-      .bind(nowIso(), session.user_id, classId).run();
+    const lastUpdate = presenceUpdates.get(session.user_id) || 0;
+    if (Date.now() - lastUpdate >= 60000) {
+      const cutoff = new Date(Date.now() - 60000).toISOString();
+      await env.DB.prepare('UPDATE students SET last_seen_at=? WHERE id=? AND class_id=? AND last_seen_at<=?')
+        .bind(nowIso(), session.user_id, classId, cutoff).run();
+      if (presenceUpdates.size >= 1000) presenceUpdates.clear();
+      presenceUpdates.set(session.user_id, Date.now());
+    }
   } else {
     await ownedClass(env, session, classId);
   }
   const classRow = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
-  const activeTimer = await env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first();
-  const result = { version: Number(classRow && classRow.version || 1), timer: timerJson(activeTimer) };
-  if (session.role === 'student') {
+  const version = Number(classRow && classRow.version || 1);
+  const changed = Number(payload.knownVersion) !== version;
+  const result = { version, unchanged: !changed };
+  if (changed) result.timer = timerJson(await env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first());
+  if (session.role === 'student' && changed) {
     const reviewRows = await all(env.DB.prepare(
       'SELECT id,status,updated_at FROM board_posts WHERE class_id=? AND student_id=? ORDER BY updated_at DESC'
     ).bind(classId, session.user_id));
@@ -1925,7 +1958,7 @@ async function handleAction(request, env) {
     case 'createGuestBoard': return createGuestBoard(env, session, payload);
     case 'updateGuestBoard': return updateGuestBoard(env, session, payload);
     case 'deleteGuestBoard': return deleteGuestBoard(env, session, payload);
-    case 'getGuestRoom': return getGuestRoom(env, session);
+    case 'getGuestRoom': return getGuestRoom(env, session, payload);
     case 'upsertGuestPost': return upsertGuestPost(env, session, payload);
     case 'deleteGuestPost': return deleteGuestPost(env, session, payload);
     case 'closeGuestRoom': return closeGuestRoom(env, session, payload);

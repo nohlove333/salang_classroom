@@ -40,7 +40,7 @@
     if (canReuse) {
       paint();
       startSync();
-      refresh();
+      refresh(true);
       return;
     }
     loading(container);
@@ -258,22 +258,39 @@
     catch (error) { UI.toast(error.message, 'error'); }
   }
 
-  async function refresh() {
+  async function refresh(background) {
     if (syncBusy) return;
     syncBusy = true;
     var y = window.scrollY;
-    try { roomData = await API.request('getGuestRoom', {}, 'guest', 1); paint(); window.requestAnimationFrame(function () { window.scrollTo(0, y); }); }
+    try {
+      var payload = background && roomData ? { knownVersion: roomData.room.version } : {};
+      var response = await API.request('getGuestRoom', payload, 'guest', background ? 0 : 1);
+      if (response.unchanged && roomData) {
+        var statusChanged = roomData.room.status !== response.room.status;
+        roomData.room = response.room;
+        if (statusChanged) paint();
+      } else {
+        roomData = response;
+        paint();
+        window.requestAnimationFrame(function () { window.scrollTo(0, y); });
+      }
+      if (roomData.room.status !== 'open') stop();
+    }
     catch (error) {
       if (error.code === 'ROOM_CLOSED') UI.toast(error.message, 'error');
+      if (background) throw error;
     } finally { syncBusy = false; }
   }
 
   function startSync() {
-    syncTimer = window.setInterval(refresh, 6000);
+    if (syncTimer) syncTimer();
+    syncTimer = window.LearnSync.start(function () { return refresh(true); }, {
+      interval: Math.max(8000, Number((window.LEARN_CONFIG || {}).guestSyncSeconds || 10) * 1000), immediate: false
+    });
   }
 
   function stop() {
-    if (syncTimer) window.clearInterval(syncTimer);
+    if (syncTimer) syncTimer();
     syncTimer = null;
     syncBusy = false;
   }

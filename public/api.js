@@ -5,6 +5,58 @@
   var teacherSessionKey = 'learn_teacher_session_v1';
   var studentSessionKey = 'learn_student_session_v1';
   var guestSessionKey = 'learn_guest_session_v1';
+  var requestBlockedUntil = 0;
+
+  // Background work is paused while the page is hidden/offline. Failed checks
+  // back off instead of repeating requests at the normal classroom cadence.
+  function startSync(task, options) {
+    options = options || {};
+    var interval = Math.max(8000, Number(options.interval || 10000));
+    var timeout = null;
+    var stopped = false;
+    var busy = false;
+    var failures = 0;
+    var retryAt = 0;
+    function available() { return document.visibilityState !== 'hidden' && navigator.onLine !== false; }
+    function cancelTimeout() { if (timeout != null) window.clearTimeout(timeout); timeout = null; }
+    function schedule() {
+      cancelTimeout();
+      if (stopped || !available()) return;
+      var delay = Math.max(interval * Math.pow(2, Math.min(failures, 5)), retryAt - Date.now(), requestBlockedUntil - Date.now());
+      timeout = window.setTimeout(tick, delay);
+    }
+    async function tick() {
+      timeout = null;
+      if (stopped || busy || !available()) return;
+      if (Date.now() < Math.max(retryAt, requestBlockedUntil)) { schedule(); return; }
+      busy = true;
+      try { await task(); failures = 0; retryAt = 0; }
+      catch (error) {
+        if (['SESSION_EXPIRED', 'UNAUTHORIZED', 'ROOM_CLOSED', 'ROOM_NOT_FOUND', 'NOT_FOUND'].indexOf(error.code) >= 0) { stop(); return; }
+        failures += 1;
+        var serverRetry = error.details && Date.parse(error.details.retryAt);
+        if (Number.isFinite(serverRetry)) retryAt = serverRetry;
+      } finally { busy = false; schedule(); }
+    }
+    function resumed() {
+      cancelTimeout();
+      if (stopped || !available()) return;
+      if (!busy) tick();
+    }
+    function stop() {
+      stopped = true;
+      cancelTimeout();
+      document.removeEventListener('visibilitychange', resumed);
+      window.removeEventListener('online', resumed);
+      window.removeEventListener('offline', resumed);
+    }
+    document.addEventListener('visibilitychange', resumed);
+    window.addEventListener('online', resumed);
+    window.addEventListener('offline', resumed);
+    if (options.immediate !== false) tick(); else schedule();
+    return stop;
+  }
+  window.LearnSync = { start: startSync };
 
   function sessionKey(role) {
     if (role === 'teacher') return teacherSessionKey;
@@ -229,6 +281,9 @@
     if (!config.apiUrl || config.apiUrl.indexOf('PASTE_') === 0) {
       throw new ApiError('Cloudflare API 주소가 아직 설정되지 않았습니다.', 'NOT_CONFIGURED');
     }
+    if (Date.now() < requestBlockedUntil) {
+      throw new ApiError('오늘의 무료 사용 한도에 도달했습니다. 한국 시간 다음 오전 9시 이후 다시 시도해 주세요.', 'DAILY_LIMIT_EXCEEDED', { retryAt: new Date(requestBlockedUntil).toISOString() });
+    }
 
     var session = role ? readSession(role) : null;
     var body = {
@@ -252,6 +307,10 @@
         result = null;
       }
       if (!response.ok) {
+        if (result && result.code === 'DAILY_LIMIT_EXCEEDED') {
+          requestBlockedUntil = Date.parse(result.details && result.details.retryAt) || Date.now() + 60000;
+          if (window.LearnUI && window.LearnUI.toast) window.LearnUI.toast(result.message, 'error');
+        }
         expireSession(role, result && result.code ? result.code : '');
         throw new ApiError(
           result && result.message ? result.message : '서버 응답이 원활하지 않습니다.',

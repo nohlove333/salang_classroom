@@ -911,7 +911,7 @@
 
   function startHeartbeat(classId) {
     /* 화면의 1초 카운트다운은 유지하고 서버 동기화 타이머만 교체합니다. */
-    if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+    if (heartbeatTimer) heartbeatTimer();
     if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
     heartbeatTimer = null;
     heartbeatVisibilityHandler = null;
@@ -945,26 +945,21 @@
     function beat() {
       if (heartbeatBusy) return;
       heartbeatBusy = true;
-      API.request('heartbeat', { classId: classId }, 'student', 1).then(function (response) {
+      return API.request('heartbeat', { classId: classId, knownVersion: studentData && studentData.classInfo.version }, 'student', 0).then(function (response) {
         var reviewChanged = applyBoardReviews(response && response.boardReviews);
         if (reviewChanged) repaintWithoutJump();
         if (studentData && response && response.version != null &&
             Number(response.version) !== Number(studentData.classInfo.version)) {
           return refreshClassSilently();
         }
-      }).catch(function () {}).finally(function () { heartbeatBusy = false; });
+      }).finally(function () { heartbeatBusy = false; });
     }
-    beat();
     var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
-    heartbeatTimer = window.setInterval(beat, syncMilliseconds);
-    heartbeatVisibilityHandler = function () {
-      if (document.visibilityState === 'visible') beat();
-    };
-    document.addEventListener('visibilitychange', heartbeatVisibilityHandler);
+    heartbeatTimer = window.LearnSync.start(beat, { interval: syncMilliseconds });
   }
 
   function stopHeartbeat() {
-    if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+    if (heartbeatTimer) heartbeatTimer();
     if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
     heartbeatTimer = null;
     heartbeatVisibilityHandler = null;

@@ -1851,7 +1851,7 @@
 
   function startPresence(classId) {
     /* 화면의 1초 카운트다운은 유지하고 접속/변경 동기화 타이머만 교체합니다. */
-    if (presenceTimer) window.clearInterval(presenceTimer);
+    if (presenceTimer) presenceTimer();
     if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
     presenceTimer = null;
     presenceVisibilityHandler = null;
@@ -1859,7 +1859,8 @@
     function heartbeat() {
       if (presenceBusy) return;
       presenceBusy = true;
-      API.request('heartbeat', { classId: classId }, 'teacher', 1).then(function (response) {
+      checkStorageStatus();
+      return API.request('heartbeat', { classId: classId, knownVersion: classData && classData.classInfo.version }, 'teacher', 0).then(function (response) {
         if (classData && response && response.version != null &&
             Number(response.version) !== Number(classData.classInfo.version)) {
           return refreshClassSilently(classId);
@@ -1868,16 +1869,10 @@
         var count = document.querySelector('[data-online-count]');
         if (list && response.onlineStudents) list.innerHTML = presenceRows(response.onlineStudents);
         if (count && response.onlineStudents) count.textContent = response.onlineStudents.length + '명';
-      }).catch(function () {}).finally(function () { presenceBusy = false; });
-      checkStorageStatus();
+      }).finally(function () { presenceBusy = false; });
     }
-    heartbeat();
     var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
-    presenceTimer = window.setInterval(heartbeat, syncMilliseconds);
-    presenceVisibilityHandler = function () {
-      if (document.visibilityState === 'visible') heartbeat();
-    };
-    document.addEventListener('visibilitychange', presenceVisibilityHandler);
+    presenceTimer = window.LearnSync.start(heartbeat, { interval: syncMilliseconds });
   }
 
   async function renderGuestRoom(container, roomId, tab, forceRefresh) {
@@ -2202,31 +2197,42 @@
     });
   }
 
-  async function refreshGuestRoomSilently(roomId, force) {
+  async function refreshGuestRoomSilently(roomId, force, background) {
     if ((guestRoomBusy && !force) || !guestRoomContainer || !guestRoomContainer.isConnected) return;
     guestRoomBusy = true;
     var y = window.scrollY;
     try {
-      guestRoomData = await API.request('getTeacherGuestRoom', { roomId: roomId }, 'teacher', 1);
+      var payload = { roomId: roomId };
+      if (background && guestRoomData) payload.knownVersion = guestRoomData.room.version;
+      var response = await API.request('getTeacherGuestRoom', payload, 'teacher', background ? 0 : 1);
+      if (response.unchanged && guestRoomData) {
+        var statusChanged = guestRoomData.room.status !== response.room.status;
+        guestRoomData.room = response.room;
+        if (statusChanged) paintGuestRoom(guestRoomContainer, roomId, guestRoomTab);
+        return;
+      }
+      guestRoomData = response;
       paintGuestRoom(guestRoomContainer, roomId, guestRoomTab);
       window.requestAnimationFrame(function () { window.scrollTo(0, y); });
-    } catch (error) {} finally { guestRoomBusy = false; }
+    } catch (error) { if (background) throw error; } finally { guestRoomBusy = false; }
   }
 
   function startGuestRoomSync(roomId) {
-    if (guestRoomTimer) window.clearInterval(guestRoomTimer);
-    guestRoomTimer = window.setInterval(function () { refreshGuestRoomSilently(roomId); }, 6000);
+    if (guestRoomTimer) guestRoomTimer();
+    guestRoomTimer = window.LearnSync.start(function () { return refreshGuestRoomSilently(roomId, false, true); }, {
+      interval: Math.max(8000, Number((window.LEARN_CONFIG || {}).guestSyncSeconds || 10) * 1000), immediate: false
+    });
   }
 
   function stopPresence() {
-    if (presenceTimer) window.clearInterval(presenceTimer);
+    if (presenceTimer) presenceTimer();
     if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
     presenceTimer = null;
     presenceVisibilityHandler = null;
     presenceBusy = false;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
-    if (guestRoomTimer) window.clearInterval(guestRoomTimer);
+    if (guestRoomTimer) guestRoomTimer();
     guestRoomTimer = null;
     guestRoomBusy = false;
   }
