@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-12-v46';
+const RELEASE = '2026-10-15-v47';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -8,6 +8,9 @@ let coreSchemaCheckedAt = 0;
 let schemaCheckPromise = null;
 const presenceUpdates = new Map();
 const initializedGuestRooms = new Set();
+// Only raw, server-side snapshots are shared. Every response is copied and
+// filtered for the authenticated student before it leaves this Worker.
+const classSnapshots = new Map();
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -644,7 +647,45 @@ async function loadAttachmentMap(env, classId) {
   return map;
 }
 
-async function classData(env, classId, studentId = '') {
+async function classData(env, classId, studentId = '', knownVersion = null) {
+  let version = knownVersion;
+  if (version == null) {
+    const row = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
+    if (!row) throw new AppError('클래스를 찾을 수 없습니다.', 'NOT_FOUND', 404);
+    version = Number(row.version || 1);
+  }
+  let entry = classSnapshots.get(classId);
+  if (!entry || entry.version !== version || Date.now() >= entry.expiresAt) {
+    if (!classSnapshots.has(classId) && classSnapshots.size >= 12) {
+      classSnapshots.delete(classSnapshots.keys().next().value);
+    }
+    entry = { version, expiresAt: Date.now() + 10000, promise: null };
+    classSnapshots.set(classId, entry);
+    entry.promise = readClassSnapshot(env, classId).catch((error) => {
+      if (classSnapshots.get(classId) === entry) classSnapshots.delete(classId);
+      throw error;
+    });
+  }
+  const data = structuredClone(await entry.promise);
+  if (studentId) {
+    data.submissions = data.submissions.filter((item) => item.studentId === studentId);
+    for (const item of data.boardPosts) {
+      if (item.studentId !== studentId) {
+        item.status = 'published';
+        item.revisionMessage = '';
+      }
+    }
+    for (const item of data.ideaPosts) {
+      item.mine = item.studentId === studentId;
+      delete item.studentId;
+      delete item.studentNumber;
+      delete item.studentName;
+    }
+  }
+  return data;
+}
+
+async function readClassSnapshot(env, classId, studentId = '') {
   const classRow = await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(classId).first();
   if (!classRow) throw new AppError('클래스를 찾을 수 없습니다.', 'NOT_FOUND', 404);
   const cutoff = new Date(Date.now() - 90000).toISOString();
@@ -720,6 +761,7 @@ async function classData(env, classId, studentId = '') {
 }
 
 async function touchClass(env, classId) {
+  classSnapshots.delete(classId);
   await env.DB.prepare('UPDATE classes SET version=version+1, updated_at=? WHERE id=?').bind(nowIso(), classId).run();
 }
 
@@ -1590,16 +1632,14 @@ async function heartbeat(env, session, payload) {
   const version = Number(classRow && classRow.version || 1);
   const changed = Number(payload.knownVersion) !== version;
   const result = { version, unchanged: !changed };
-  if (changed) result.timer = timerJson(await env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first());
-  if (session.role === 'student' && changed) {
-    const reviewRows = await all(env.DB.prepare(
-      'SELECT id,status,updated_at FROM board_posts WHERE class_id=? AND student_id=? ORDER BY updated_at DESC'
-    ).bind(classId, session.user_id));
-    result.boardReviews = reviewRows.map((row) => ({
-      postId: row.id,
-      status: row.status || 'published',
-      updatedAt: row.updated_at || ''
-    }));
+  if (changed) {
+    result.classData = await classData(env, classId, session.role === 'student' ? session.user_id : '', version);
+    result.version = result.classData.classInfo.version;
+    result.timer = result.classData.timer;
+    if (session.role === 'student') {
+      result.boardReviews = result.classData.boardPosts.filter((post) => post.studentId === session.user_id)
+        .map((post) => ({ postId: post.id, status: post.status || 'published', updatedAt: post.updatedAt || '' }));
+    }
   }
   if (session.role === 'teacher') {
     const cutoff = new Date(Date.now() - 90000).toISOString();
@@ -1607,6 +1647,7 @@ async function heartbeat(env, session, payload) {
       'SELECT *,1 AS online FROM students WHERE class_id=? AND last_seen_at>=? ORDER BY number'
     ).bind(classId, cutoff));
     result.onlineStudents = rows.map(studentJson);
+    if (result.classData) result.classData.onlineStudents = result.onlineStudents;
   }
   return result;
 }
@@ -2109,3 +2150,4 @@ export default {
     }
   }
 };
+

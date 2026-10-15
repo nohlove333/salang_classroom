@@ -597,13 +597,13 @@
     }
   }
 
-  async function refreshClassSilently(classId) {
+  async function refreshClassSilently(classId, latest) {
     if (classRefreshBusy || !activeClassContainer || !activeClassContainer.isConnected) return;
     classRefreshBusy = true;
     var scrollX = window.scrollX;
     var scrollY = window.scrollY;
     try {
-      var latest = await API.request('getTeacherClass', { classId: classId }, 'teacher', 1);
+      latest = latest || await API.request('getTeacherClass', { classId: classId }, 'teacher', 1);
       classData = latest;
       classDataId = String(classId);
       paintClass(activeClassContainer, classId, activeClassTab);
@@ -1863,7 +1863,7 @@
       return API.request('heartbeat', { classId: classId, knownVersion: classData && classData.classInfo.version }, 'teacher', 0).then(function (response) {
         if (classData && response && response.version != null &&
             Number(response.version) !== Number(classData.classInfo.version)) {
-          return refreshClassSilently(classId);
+          return refreshClassSilently(classId, response.classData);
         }
         var list = document.querySelector('[data-presence-list]');
         var count = document.querySelector('[data-online-count]');
@@ -2250,3 +2250,4 @@
     stop: stopPresence
   };
 })();
+

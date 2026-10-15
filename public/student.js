@@ -83,7 +83,7 @@
 
   }
 
-  async function refreshClassSilently() {
+  async function refreshClassSilently(latest) {
     if (studentRefreshBusy || !activeContainer || !activeContainer.isConnected) return;
     studentRefreshBusy = true;
     var session = sessionOrLogin();
@@ -94,7 +94,7 @@
     var scrollX = window.scrollX;
     var scrollY = window.scrollY;
     try {
-      studentData = await API.request('getStudentClass', {}, 'student', 1);
+      studentData = latest || await API.request('getStudentClass', {}, 'student', 1);
       paintClass(activeContainer, activeTab, session);
       window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
     } catch (error) {
@@ -950,7 +950,7 @@
         if (reviewChanged) repaintWithoutJump();
         if (studentData && response && response.version != null &&
             Number(response.version) !== Number(studentData.classInfo.version)) {
-          return refreshClassSilently();
+          return refreshClassSilently(response.classData);
         }
       }).finally(function () { heartbeatBusy = false; });
     }
@@ -1005,3 +1005,4 @@
     editAttachment: editAttachmentOwner
   };
 })();
+
