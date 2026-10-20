@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-20-v48';
+const RELEASE = '2026-10-20-v49';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS teacher_resources (
   id TEXT PRIMARY KEY,
   teacher_id TEXT NOT NULL,
   title TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL DEFAULT '',
   links TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
@@ -847,6 +848,15 @@ async function ensureTeacherResourceSchema(env) {
       for (const sql of TEACHER_RESOURCE_SCHEMA.split(';').map((s) => s.trim()).filter(Boolean)) {
         await env.DB.prepare(sql).run();
       }
+      const columns = await all(env.DB.prepare('PRAGMA table_info(teacher_resources)'));
+      if (!columns.some((column) => column.name === 'category')) {
+        try {
+          await env.DB.prepare("ALTER TABLE teacher_resources ADD COLUMN category TEXT NOT NULL DEFAULT ''").run();
+        } catch (error) {
+          if (!String(error && error.message || '').includes('duplicate column name')) throw error;
+        }
+      }
+      await env.DB.prepare('CREATE INDEX IF NOT EXISTS teacher_resources_teacher_category_updated ON teacher_resources(teacher_id,category,updated_at DESC,id DESC)').run();
     })().catch((error) => { teacherResourceSchemaPromise = null; throw error; });
   }
   return teacherResourceSchemaPromise;
@@ -860,18 +870,20 @@ async function ownedTeacherResource(env, session, id) {
 }
 
 function teacherResourceJson(row) {
-  return { id: row.id, title: row.title, body: row.body, links: JSON.parse(row.links),
+  return { id: row.id, title: row.title, category: row.category || '', body: row.body, links: JSON.parse(row.links),
     createdAt: row.created_at, updatedAt: row.updated_at, attachments: [] };
 }
 
 async function getTeacherResources(env, session, payload) {
   await ensureTeacherResourceSchema(env);
   const cursor = payload.cursor;
+  const category = payload.category == null ? null : normalizeResourceCategory(payload.category);
   const rows = await all(env.DB.prepare(
     'SELECT * FROM teacher_resources WHERE teacher_id=?' +
+    (category !== null ? ' AND category=?' : '') +
     (cursor ? ' AND (updated_at<? OR (updated_at=? AND id<?))' : '') +
     ' ORDER BY updated_at DESC,id DESC LIMIT 51'
-  ).bind(session.user_id, ...(cursor ? [String(cursor.updatedAt || ''), String(cursor.updatedAt || ''), String(cursor.id || '')] : [])));
+  ).bind(session.user_id, ...(category !== null ? [category] : []), ...(cursor ? [String(cursor.updatedAt || ''), String(cursor.updatedAt || ''), String(cursor.id || '')] : [])));
   const page = rows.slice(0, 50);
   const items = page.map(teacherResourceJson);
   if (page.length) {
@@ -882,7 +894,18 @@ async function getTeacherResources(env, session, payload) {
     for (const file of attachments) map.get(file.owner_id).attachments.push(fileJson(file));
   }
   const last = page[page.length - 1];
-  return { items, nextCursor: rows.length > 50 ? { updatedAt: last.updated_at, id: last.id } : null };
+  const categories = !cursor ? (await all(env.DB.prepare(
+    "SELECT DISTINCT category FROM teacher_resources WHERE teacher_id=? AND category<>'' ORDER BY category"
+  ).bind(session.user_id))).map((row) => row.category) : undefined;
+  return { items, categories, nextCursor: rows.length > 50 ? { updatedAt: last.updated_at, id: last.id } : null };
+}
+
+function normalizeResourceCategory(value) {
+  const category = String(value || '').trim().normalize('NFC');
+  if (category.length > 40 || /[\u0000-\u001f\u007f]/.test(category)) {
+    throw new AppError('카테고리 이름은 줄바꿈 없이 40자까지 입력해 주세요.', 'INVALID_CATEGORY');
+  }
+  return category;
 }
 
 function normalizeResourceLinks(value) {
@@ -901,6 +924,7 @@ function normalizeResourceLinks(value) {
 async function upsertTeacherResource(env, session, payload) {
   await ensureTeacherResourceSchema(env);
   const existing = payload.id ? await ownedTeacherResource(env, session, payload.id) : null;
+  const category = payload.category === undefined && existing ? existing.category : normalizeResourceCategory(payload.category);
   const title = String(payload.title || '').trim();
   const body = String(payload.body || '').trim();
   if (!title || title.length > 100) throw new AppError('제목은 1~100자로 입력해 주세요.', 'INVALID_TITLE');
@@ -920,11 +944,11 @@ async function upsertTeacherResource(env, session, payload) {
   const id = existing ? existing.id : uid('resource');
   const time = nowIso();
   if (existing) {
-    await env.DB.prepare('UPDATE teacher_resources SET title=?,body=?,links=?,updated_at=? WHERE id=? AND teacher_id=?')
-      .bind(title, body, JSON.stringify(links), time, id, session.user_id).run();
+    await env.DB.prepare('UPDATE teacher_resources SET title=?,category=?,body=?,links=?,updated_at=? WHERE id=? AND teacher_id=?')
+      .bind(title, category, body, JSON.stringify(links), time, id, session.user_id).run();
   } else {
-    await env.DB.prepare('INSERT INTO teacher_resources(id,teacher_id,title,body,links,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
-      .bind(id, session.user_id, title, body, JSON.stringify(links), time, time).run();
+    await env.DB.prepare('INSERT INTO teacher_resources(id,teacher_id,title,category,body,links,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+      .bind(id, session.user_id, title, category, body, JSON.stringify(links), time, time).run();
   }
   const attachments = await replaceAttachments(env, 'teacher_resource', id, payload.keepAttachmentIds, payload.files, session);
   return { ...teacherResourceJson(await ownedTeacherResource(env, session, id)), attachments };

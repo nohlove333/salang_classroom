@@ -12,6 +12,8 @@ const db = new DatabaseSync(':memory:');
 db.exec('PRAGMA foreign_keys=ON');
 // Simulate an existing v47 database that has no resource table.
 db.exec(workerModule.SCHEMA.replace(workerModule.TEACHER_RESOURCE_SCHEMA, ''));
+const upgradingV48 = process.env.TEST_RESOURCE_SCHEMA === 'v48';
+if (upgradingV48) db.exec(workerModule.TEACHER_RESOURCE_SCHEMA.replace("  category TEXT NOT NULL DEFAULT '',\n", ''));
 const sqlLog = [];
 function prepare(sql, args = []) {
   return {
@@ -40,6 +42,8 @@ const expires = new Date(Date.now() + 86400000).toISOString();
 for (const id of ['teacher-a', 'teacher-b']) {
   db.prepare('INSERT INTO teachers VALUES(?,?,?,?,?,?)').run(id, id + '@example.test', id, 'unused', 'unused', time);
 }
+if (upgradingV48) db.prepare('INSERT INTO teacher_resources(id,teacher_id,title,body,links,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
+  .run('legacy-resource', 'teacher-a', '기존 교사 자료', '원본 설명', '["https://example.com/old"]', time, time);
 db.prepare('INSERT INTO classes(id,teacher_id,name,code,created_at,updated_at) VALUES(?,?,?,?,?,?)').run('class-a', 'teacher-a', '기존 반', 'TEST', time, time);
 db.prepare('INSERT INTO students(id,class_id,number,name,pin_hash,pin_salt,created_at) VALUES(?,?,?,?,?,?,?)').run('student-a', 'class-a', 1, '학생', 'unused', 'unused', time);
 async function token(value, role, userId, classId = '') {
@@ -68,8 +72,15 @@ async function upload(auth = a, name = '학습지.pdf') {
   return (await response.json()).data;
 }
 
-assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='teacher_resources'").get(), undefined);
-assert.deepEqual((await call('getTeacherResources')).items, []);
+if (!upgradingV48) assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='teacher_resources'").get(), undefined);
+const initial = await call('getTeacherResources');
+if (upgradingV48) {
+  assert.equal(initial.items[0].title, '기존 교사 자료');
+  assert.equal(initial.items[0].body, '원본 설명');
+  assert.equal(initial.items[0].category, '');
+  assert.deepEqual(initial.items[0].links, ['https://example.com/old']);
+  db.prepare('DELETE FROM teacher_resources WHERE id=?').run('legacy-resource');
+} else assert.deepEqual(initial.items, []);
 assert.equal(db.prepare('SELECT COUNT(*) AS n FROM students').get().n, 1);
 const first = await upload();
 const second = await upload(a, '수업자료.pdf');
@@ -115,7 +126,8 @@ const normalClass = await call('getStudentClass', {}, await studentToken());
 assert.equal(JSON.stringify(normalClass).includes('수정한 자료'), false);
 assert.equal(JSON.stringify(normalClass).includes(second.id), false);
 for (let i = 0; i < 55; i++) {
-  db.prepare('INSERT INTO teacher_resources VALUES(?,?,?,?,?,?,?)').run('page-' + String(i).padStart(3, '0'), 'teacher-a', '자료 ' + i, '', '[]', time, time);
+  db.prepare('INSERT INTO teacher_resources(id,teacher_id,title,category,body,links,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
+    .run('page-' + String(i).padStart(3, '0'), 'teacher-a', '자료 ' + i, i % 2 ? '참고 영상' : '사회 1', '', '[]', time, time);
 }
 const page1 = await call('getTeacherResources');
 assert.equal(page1.items.length, 50);
@@ -126,6 +138,31 @@ assert.equal(page2.nextCursor, null);
 assert.equal(new Set([...page1.items, ...page2.items].map((entry) => entry.id)).size, 56);
 assert.equal(sqlLog.filter((sql) => sql.includes('CREATE TABLE IF NOT EXISTS teacher_resources')).length, 1);
 assert.ok(db.prepare('EXPLAIN QUERY PLAN SELECT * FROM teacher_resources WHERE teacher_id=? ORDER BY updated_at DESC,id DESC LIMIT 51').all('teacher-a').some((r) => r.detail.includes('teacher_resources_teacher_updated')));
+assert.deepEqual(page1.categories, ['사회 1', '참고 영상']);
+assert.deepEqual((await call('getTeacherResources', {}, b)).categories, []);
+const social = await call('getTeacherResources', { category: '사회 1' });
+assert.equal(social.items.length, 28);
+assert.ok(social.items.every((row) => row.category === '사회 1'));
+assert.deepEqual((await call('getTeacherResources', { category: '' })).items.map((row) => row.id), [item.id]);
+assert.deepEqual((await call('getTeacherResources', { category: '없는 분류' })).items, []);
+await call('upsertTeacherResource', { id: item.id, title: '카테고리 변경', category: '  학습지  ', keepAttachmentIds: [second.id] });
+assert.equal((await call('getTeacherResources', { category: '학습지' })).items[0].id, item.id);
+assert.equal((await call('getTeacherResources', { category: '' })).items.length, 0);
+// Cached v48 clients may still omit category: preserve an assigned category.
+await call('upsertTeacherResource', { id: item.id, title: '이전 클라이언트 수정', keepAttachmentIds: [second.id] });
+assert.equal((await call('getTeacherResources', { category: '학습지' })).items[0].category, '학습지');
+await call('upsertTeacherResource', { id: item.id, title: '무효', category: '가'.repeat(41) }, a, 400);
+await call('upsertTeacherResource', { id: item.id, title: '무효', category: '잘못된\n이름' }, a, 400);
+assert.ok(db.prepare('EXPLAIN QUERY PLAN SELECT * FROM teacher_resources WHERE teacher_id=? AND category=? ORDER BY updated_at DESC,id DESC LIMIT 51').all('teacher-a', '사회 1').some((r) => r.detail.includes('teacher_resources_teacher_category_updated')));
+// Filter on the server, including resources beyond the first unfiltered page.
+db.prepare("UPDATE teacher_resources SET category='같은 분류' WHERE teacher_id=?").run('teacher-a');
+const filtered1 = await call('getTeacherResources', { category: '같은 분류' });
+const filtered2 = await call('getTeacherResources', { category: '같은 분류', cursor: filtered1.nextCursor });
+assert.equal(filtered1.items.length, 50);
+assert.equal(filtered2.items.length, 6);
+assert.equal(new Set([...filtered1.items, ...filtered2.items].map((row) => row.id)).size, 56);
+await call('upsertTeacherResource', { id: item.id, title: '미분류로 이동', category: '', keepAttachmentIds: [second.id] });
+assert.equal((await call('getTeacherResources', { category: '' })).items[0].id, item.id);
 await call('deleteTeacherResource', { id: item.id });
 assert.equal(objects.size, 1); // Only the other teacher's unattached upload remains.
 assert.equal(db.prepare('SELECT id FROM files WHERE id=?').get(second.id), undefined);
@@ -134,4 +171,4 @@ await call('deleteTeacherResource', { id: item.id }, a, 404);
 assert.equal(db.prepare('SELECT COUNT(*) AS n FROM teachers').get().n, 2);
 assert.equal(db.prepare('SELECT COUNT(*) AS n FROM classes').get().n, 1);
 db.close();
-console.log('PASS: existing DB upgrade, CRUD, links, multi-file upload/download/removal, teacher isolation, student/guest denial, normal class privacy, indexed pagination, one-time schema initialization.');
+console.log('PASS (' + (upgradingV48 ? 'v48 upgrade' : 'v47 upgrade') + '): resources CRUD/files/privacy; categories creation, editing, unclassified, ownership, validation, old-client compatibility, indexed filtered pagination, one-time schema migration.');

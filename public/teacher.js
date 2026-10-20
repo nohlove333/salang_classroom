@@ -167,19 +167,30 @@
   var resourceItems = [];
   var resourceCursor = null;
   var resourceLoadVersion = 0;
+  var resourceCategories = [];
+  var resourceCategoryFilter = null;
+  var resourceTeacherToken = '';
 
   async function renderResources(container, append) {
-    if (!sessionOrLogin()) return;
+    var session = sessionOrLogin();
+    if (!session) return;
+    if (resourceTeacherToken !== session.token) {
+      resourceTeacherToken = session.token;
+      resourceCategoryFilter = null;
+      resourceCategories = [];
+      append = false;
+    }
     stopPresence();
     var version = ++resourceLoadVersion;
     if (!append) loading(container, '교사 자료를 불러오고 있어요.');
     var moreButton = container.querySelector('[data-more-resources]');
     if (moreButton) UI.busy(moreButton, true, '불러오는 중…');
     try {
-      var data = await API.request('getTeacherResources', { cursor: append ? resourceCursor : null }, 'teacher');
+      var data = await API.request('getTeacherResources', { cursor: append ? resourceCursor : null, category: resourceCategoryFilter }, 'teacher');
       if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
       resourceItems = append ? resourceItems.concat(data.items) : data.items;
       resourceCursor = data.nextCursor;
+      if (data.categories) resourceCategories = data.categories;
       paintResources(container);
     } catch (error) {
       if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
@@ -189,6 +200,16 @@
     }
   }
 
+  function resourceCategoryOptions() {
+    var categories = resourceCategories.slice();
+    if (resourceCategoryFilter && categories.indexOf(resourceCategoryFilter) < 0) categories.push(resourceCategoryFilter);
+    return '<option value="all"' + (resourceCategoryFilter === null ? ' selected' : '') + '>전체 자료</option>' +
+      '<option value="uncategorized"' + (resourceCategoryFilter === '' ? ' selected' : '') + '>미분류</option>' +
+      categories.map(function (category) {
+        return '<option value="' + UI.attr('category:' + category) + '"' + (resourceCategoryFilter === category ? ' selected' : '') + '>' + UI.escape(category) + '</option>';
+      }).join('');
+  }
+
   function paintResources(container) {
     container.innerHTML = '<section class="app-page teacher-resources-page">' +
       '<a class="text-link" href="#/teacher">← 클래스 목록</a>' +
@@ -196,18 +217,29 @@
         '<h1>교사 자료방</h1><p>수업에 필요한 링크와 첨부자료를 모아 두세요. 내 교사 계정에서만 볼 수 있어요.</p></div>' +
         '<div class="dashboard-tools"><button class="button secondary" type="button" data-refresh-resources>새로고침</button>' +
           '<button class="button" type="button" data-add-resource>＋ 자료 추가</button></div></div>' +
+      '<div class="panel teacher-resource-filter"><div class="field"><label for="resource-category-filter">카테고리별 보기</label>' +
+        '<select id="resource-category-filter" data-resource-category-filter>' + resourceCategoryOptions() + '</select></div>' +
+        '<p class="muted-text">자료 추가·수정에서 카테고리 이름을 입력해 만들 수 있어요.</p></div>' +
       (resourceItems.length ? '<div class="teacher-resource-list">' + resourceItems.map(function (item) {
         return '<article class="panel teacher-resource-card"><div class="teacher-resource-head"><h2>' + UI.escape(item.title) + '</h2>' +
           '<div class="teacher-resource-actions"><button class="button secondary small" type="button" data-edit-resource="' + UI.attr(item.id) + '">수정</button>' +
           '<button class="button secondary small" type="button" data-delete-resource="' + UI.attr(item.id) + '">삭제</button></div></div>' +
+          '<span class="teacher-resource-category">' + UI.escape(item.category || '미분류') + '</span>' +
           (item.body ? '<p class="teacher-resource-body">' + UI.escape(item.body) + '</p>' : '') +
           ((item.links || []).length ? '<ul class="teacher-resource-links">' + item.links.map(function (link) {
             return '<li><a href="' + UI.attr(link) + '" target="_blank" rel="noopener noreferrer">' + UI.escape(link) + '<span class="sr-only"> (새 창)</span></a></li>';
           }).join('') + '</ul>' : '') + UI.attachments(item.attachments, 'teacher', false, { heading: item.title, text: item.body, allowArchive: false }) + '</article>';
-      }).join('') + '</div>' : '<div class="panel">' + UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.') + '</div>') +
+      }).join('') + '</div>' : '<div class="panel">' + (resourceCategoryFilter !== null
+        ? UI.empty('이 카테고리에 자료가 없어요', '자료 추가에서 새 자료를 등록하거나 기존 자료의 카테고리를 바꿔 보세요.')
+        : UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.')) + '</div>') +
       (resourceCursor ? '<div class="teacher-resource-more"><button class="button secondary" type="button" data-more-resources>자료 더 보기</button></div>' : '') + '</section>';
     container.querySelector('[data-add-resource]').addEventListener('click', function () { openResourceEditor(null, container); });
     container.querySelector('[data-refresh-resources]').addEventListener('click', function () { renderResources(container); });
+    container.querySelector('[data-resource-category-filter]').addEventListener('change', function (event) {
+      var value = event.currentTarget.value;
+      resourceCategoryFilter = value === 'all' ? null : (value === 'uncategorized' ? '' : value.slice('category:'.length));
+      renderResources(container);
+    });
     var more = container.querySelector('[data-more-resources]');
     if (more) more.addEventListener('click', function () { renderResources(container, true); });
     container.querySelectorAll('[data-edit-resource]').forEach(function (button) {
@@ -246,9 +278,13 @@
 
   function openResourceEditor(item, container) {
     var value = item || {};
+    var category = item ? (item.category || '') : (resourceCategoryFilter || '');
     var dialog = UI.modal({ title: item ? '교사 자료 수정' : '교사 자료 추가', closeOnBackdrop: false,
       html: '<form class="form-stack" data-resource-form>' +
         '<div class="field"><label for="resource-title">제목</label><input id="resource-title" name="title" required maxlength="100" value="' + UI.attr(value.title || '') + '"></div>' +
+        '<div class="field"><label for="resource-category">카테고리</label><input id="resource-category" name="category" list="resource-category-options" maxlength="40" value="' + UI.attr(category) + '" placeholder="예: 사회 1, 학습지, 참고 영상">' +
+          '<datalist id="resource-category-options">' + resourceCategories.map(function (name) { return '<option value="' + UI.attr(name) + '"></option>'; }).join('') + '</datalist>' +
+          '<span class="field-help">기존 이름을 선택하거나 새 이름을 입력하세요. 새 이름은 저장하면 만들어져요. 비워두면 미분류로 저장됩니다.</span></div>' +
         '<div class="field"><label for="resource-body">설명</label><textarea id="resource-body" name="body" maxlength="5000" placeholder="자료에 대한 메모를 남겨 보세요.">' + UI.escape(value.body || '') + '</textarea></div>' +
         '<div class="field"><label for="resource-links">링크</label><textarea id="resource-links" name="links" rows="4" placeholder="https://로 시작하는 주소를 한 줄에 하나씩 입력">' + UI.escape((value.links || []).join('\n')) + '</textarea>' +
           '<span class="field-help">한 줄에 하나씩, 최대 20개까지 추가할 수 있어요.</span></div>' +
@@ -264,12 +300,15 @@
       var values = new FormData(event.currentTarget);
       try {
         var links = resourceLinksFromText(values.get('links'));
+        var savedCategory = String(values.get('category') || '').trim().normalize('NFC');
+        if (savedCategory.length > 40 || /[\u0000-\u001f\u007f]/.test(savedCategory)) throw new Error('카테고리 이름은 줄바꿈 없이 40자까지 입력해 주세요.');
         UI.busy(button, true, '저장 중…');
         var files = await window.LearnFiles.toPayload(picker.files());
         await API.request('upsertTeacherResource', { id: value.id || '', title: String(values.get('title') || '').trim(),
-          body: String(values.get('body') || '').trim(), links: links, files: files, keepAttachmentIds: picker.keepAttachmentIds() }, 'teacher', 0);
+          category: savedCategory, body: String(values.get('body') || '').trim(), links: links, files: files, keepAttachmentIds: picker.keepAttachmentIds() }, 'teacher', 0);
         UI.closeModal();
         UI.toast('자료를 저장했습니다.');
+        resourceCategoryFilter = savedCategory;
         renderResources(container);
       } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
     });

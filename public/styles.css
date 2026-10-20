@@ -3899,6 +3899,10 @@ body {
 /* Teacher-only resource room */
 .teacher-resources-page > .text-link { display: inline-block; margin-bottom: 20px; }
 .teacher-resource-list { display: grid; gap: 18px; }
+.teacher-resource-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding: 18px 24px; margin-bottom: 20px; }
+.teacher-resource-filter .field { margin: 0; min-width: min(100%, 220px); }
+.teacher-resource-filter p { margin: 0; font-size: .85rem; line-height: 1.6; }
+.teacher-resource-category { display: inline-block; margin-top: 12px; padding: 5px 10px; border-radius: 999px; background: var(--rose-soft); color: #9f5060; font-size: .8rem; overflow-wrap: anywhere; max-width: 100%; }
 .teacher-resource-card { padding: 24px; min-width: 0; }
 .teacher-resource-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .teacher-resource-head h2 { margin: 0; font-size: 1.15rem; line-height: 1.5; overflow-wrap: anywhere; }
