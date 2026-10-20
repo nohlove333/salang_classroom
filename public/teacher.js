@@ -92,6 +92,7 @@
               '<h1>' + UI.escape((data.teacher.name || '선생님') + '의 클래스') + '</h1>' +
               '<p>클래스를 열어 공지, 과제, 보드, 아이디어 구름과 학생을 관리하세요.</p></div>' +
             '<div class="dashboard-tools">' +
+              '<a class="button secondary" href="#/teacher/resources">교사 자료방</a>' +
               '<button class="button secondary" type="button" data-logout>로그아웃</button>' +
               '<button class="button secondary" type="button" data-create-guest-room>＋ 1회성 참여방</button>' +
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
@@ -161,6 +162,117 @@
           moveClass(button, data.classes, container);
         });
       });
+  }
+
+  var resourceItems = [];
+  var resourceCursor = null;
+  var resourceLoadVersion = 0;
+
+  async function renderResources(container, append) {
+    if (!sessionOrLogin()) return;
+    stopPresence();
+    var version = ++resourceLoadVersion;
+    if (!append) loading(container, '교사 자료를 불러오고 있어요.');
+    var moreButton = container.querySelector('[data-more-resources]');
+    if (moreButton) UI.busy(moreButton, true, '불러오는 중…');
+    try {
+      var data = await API.request('getTeacherResources', { cursor: append ? resourceCursor : null }, 'teacher');
+      if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
+      resourceItems = append ? resourceItems.concat(data.items) : data.items;
+      resourceCursor = data.nextCursor;
+      paintResources(container);
+    } catch (error) {
+      if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
+      if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
+      if (append) { UI.toast(error.message, 'error'); if (moreButton) UI.busy(moreButton, false); }
+      else errorScreen(container, error, function () { renderResources(container); });
+    }
+  }
+
+  function paintResources(container) {
+    container.innerHTML = '<section class="app-page teacher-resources-page">' +
+      '<a class="text-link" href="#/teacher">← 클래스 목록</a>' +
+      '<div class="dashboard-head"><div class="section-title"><p class="section-kicker">Teacher resources</p>' +
+        '<h1>교사 자료방</h1><p>수업에 필요한 링크와 첨부자료를 모아 두세요. 내 교사 계정에서만 볼 수 있어요.</p></div>' +
+        '<div class="dashboard-tools"><button class="button secondary" type="button" data-refresh-resources>새로고침</button>' +
+          '<button class="button" type="button" data-add-resource>＋ 자료 추가</button></div></div>' +
+      (resourceItems.length ? '<div class="teacher-resource-list">' + resourceItems.map(function (item) {
+        return '<article class="panel teacher-resource-card"><div class="teacher-resource-head"><h2>' + UI.escape(item.title) + '</h2>' +
+          '<div class="teacher-resource-actions"><button class="button secondary small" type="button" data-edit-resource="' + UI.attr(item.id) + '">수정</button>' +
+          '<button class="button secondary small" type="button" data-delete-resource="' + UI.attr(item.id) + '">삭제</button></div></div>' +
+          (item.body ? '<p class="teacher-resource-body">' + UI.escape(item.body) + '</p>' : '') +
+          ((item.links || []).length ? '<ul class="teacher-resource-links">' + item.links.map(function (link) {
+            return '<li><a href="' + UI.attr(link) + '" target="_blank" rel="noopener noreferrer">' + UI.escape(link) + '<span class="sr-only"> (새 창)</span></a></li>';
+          }).join('') + '</ul>' : '') + UI.attachments(item.attachments, 'teacher', false, { heading: item.title, text: item.body, allowArchive: false }) + '</article>';
+      }).join('') + '</div>' : '<div class="panel">' + UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.') + '</div>') +
+      (resourceCursor ? '<div class="teacher-resource-more"><button class="button secondary" type="button" data-more-resources>자료 더 보기</button></div>' : '') + '</section>';
+    container.querySelector('[data-add-resource]').addEventListener('click', function () { openResourceEditor(null, container); });
+    container.querySelector('[data-refresh-resources]').addEventListener('click', function () { renderResources(container); });
+    var more = container.querySelector('[data-more-resources]');
+    if (more) more.addEventListener('click', function () { renderResources(container, true); });
+    container.querySelectorAll('[data-edit-resource]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var item = resourceItems.find(function (entry) { return entry.id === button.dataset.editResource; });
+        if (item) openResourceEditor(item, container);
+      });
+    });
+    container.querySelectorAll('[data-delete-resource]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var yes = await UI.confirm({ title: '자료 삭제', message: '이 자료와 첨부파일을 삭제할까요?', confirmText: '삭제', danger: true });
+        if (!yes) return;
+        UI.busy(button, true, '삭제 중…');
+        try {
+          await API.request('deleteTeacherResource', { id: button.dataset.deleteResource }, 'teacher');
+          UI.toast('자료를 삭제했습니다.');
+          renderResources(container);
+        } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+      });
+    });
+    UI.bindFiles(container, 'teacher');
+  }
+
+  function resourceLinksFromText(text) {
+    var links = String(text || '').split(/\r?\n/).map(function (line) { return line.trim(); }).filter(Boolean);
+    if (links.length > 20) throw new Error('링크는 최대 20개까지 저장할 수 있어요.');
+    return links.map(function (link) {
+      var url;
+      try { url = new URL(link); } catch (error) {}
+      if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || link.length > 2048) {
+        throw new Error('링크는 https:// 또는 http://로 시작하는 웹 주소를 입력해 주세요.');
+      }
+      return url.href;
+    });
+  }
+
+  function openResourceEditor(item, container) {
+    var value = item || {};
+    var dialog = UI.modal({ title: item ? '교사 자료 수정' : '교사 자료 추가', closeOnBackdrop: false,
+      html: '<form class="form-stack" data-resource-form>' +
+        '<div class="field"><label for="resource-title">제목</label><input id="resource-title" name="title" required maxlength="100" value="' + UI.attr(value.title || '') + '"></div>' +
+        '<div class="field"><label for="resource-body">설명</label><textarea id="resource-body" name="body" maxlength="5000" placeholder="자료에 대한 메모를 남겨 보세요.">' + UI.escape(value.body || '') + '</textarea></div>' +
+        '<div class="field"><label for="resource-links">링크</label><textarea id="resource-links" name="links" rows="4" placeholder="https://로 시작하는 주소를 한 줄에 하나씩 입력">' + UI.escape((value.links || []).join('\n')) + '</textarea>' +
+          '<span class="field-help">한 줄에 하나씩, 최대 20개까지 추가할 수 있어요.</span></div>' +
+        '<div class="field"><span class="field-label">첨부자료</span><label class="file-drop" data-file-drop><input type="file" multiple data-file-input>' +
+          '<strong>파일을 끌어놓거나 눌러서 선택</strong><span>파일당 최대 ' + UI.escape((window.LEARN_CONFIG || {}).maxFileSizeMb || 25) + 'MB · 여러 개 선택 가능</span></label>' +
+          '<div class="selected-files" data-selected-files></div></div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">저장</button></div></form>' });
+    var picker = UI.filePicker(dialog, value.attachments || []);
+    dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-resource-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var button = event.currentTarget.querySelector('[type="submit"]');
+      var values = new FormData(event.currentTarget);
+      try {
+        var links = resourceLinksFromText(values.get('links'));
+        UI.busy(button, true, '저장 중…');
+        var files = await window.LearnFiles.toPayload(picker.files());
+        await API.request('upsertTeacherResource', { id: value.id || '', title: String(values.get('title') || '').trim(),
+          body: String(values.get('body') || '').trim(), links: links, files: files, keepAttachmentIds: picker.keepAttachmentIds() }, 'teacher', 0);
+        UI.closeModal();
+        UI.toast('자료를 저장했습니다.');
+        renderResources(container);
+      } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+    });
   }
 
   function summaryCell(label, number) {
@@ -2245,9 +2357,11 @@
 
   window.TeacherViews = {
     dashboard: renderDashboard,
+    resourcesPage: renderResources,
     classPage: renderClass,
     guestRoomPage: renderGuestRoom,
     stop: stopPresence
   };
 })();
+
 

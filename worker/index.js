@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-15-v47';
+const RELEASE = '2026-10-20-v48';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -11,6 +11,21 @@ const initializedGuestRooms = new Set();
 // Only raw, server-side snapshots are shared. Every response is copied and
 // filtered for the authenticated student before it leaves this Worker.
 const classSnapshots = new Map();
+
+const TEACHER_RESOURCE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS teacher_resources (
+  id TEXT PRIMARY KEY,
+  teacher_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  links TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS teacher_resources_teacher_updated ON teacher_resources(teacher_id,updated_at DESC,id DESC);
+`;
+let teacherResourceSchemaPromise = null;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teachers (
@@ -207,6 +222,7 @@ CREATE TABLE IF NOT EXISTS drive_archives (
   archived_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS drive_archives_class ON drive_archives(class_id, archived_at);
+${TEACHER_RESOURCE_SCHEMA}
 `;
 
 class AppError extends Error {
@@ -822,6 +838,104 @@ async function replaceAttachments(env, ownerType, ownerId, keepIds, uploadedFile
     'SELECT f.* FROM files f JOIN attachments a ON a.file_id=f.id WHERE a.owner_type=? AND a.owner_id=? ORDER BY a.sort_order'
   ).bind(ownerType, ownerId));
   return finalRows.map(fileJson);
+}
+
+// Only resource-room requests initialize this table on existing databases.
+async function ensureTeacherResourceSchema(env) {
+  if (!teacherResourceSchemaPromise) {
+    teacherResourceSchemaPromise = (async () => {
+      for (const sql of TEACHER_RESOURCE_SCHEMA.split(';').map((s) => s.trim()).filter(Boolean)) {
+        await env.DB.prepare(sql).run();
+      }
+    })().catch((error) => { teacherResourceSchemaPromise = null; throw error; });
+  }
+  return teacherResourceSchemaPromise;
+}
+
+async function ownedTeacherResource(env, session, id) {
+  const row = await env.DB.prepare('SELECT * FROM teacher_resources WHERE id=? AND teacher_id=?')
+    .bind(String(id || ''), session.user_id).first();
+  if (!row) throw new AppError('자료를 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  return row;
+}
+
+function teacherResourceJson(row) {
+  return { id: row.id, title: row.title, body: row.body, links: JSON.parse(row.links),
+    createdAt: row.created_at, updatedAt: row.updated_at, attachments: [] };
+}
+
+async function getTeacherResources(env, session, payload) {
+  await ensureTeacherResourceSchema(env);
+  const cursor = payload.cursor;
+  const rows = await all(env.DB.prepare(
+    'SELECT * FROM teacher_resources WHERE teacher_id=?' +
+    (cursor ? ' AND (updated_at<? OR (updated_at=? AND id<?))' : '') +
+    ' ORDER BY updated_at DESC,id DESC LIMIT 51'
+  ).bind(session.user_id, ...(cursor ? [String(cursor.updatedAt || ''), String(cursor.updatedAt || ''), String(cursor.id || '')] : [])));
+  const page = rows.slice(0, 50);
+  const items = page.map(teacherResourceJson);
+  if (page.length) {
+    const attachments = await all(env.DB.prepare(
+      `SELECT a.owner_id,f.* FROM attachments a JOIN files f ON f.id=a.file_id WHERE a.owner_type='teacher_resource' AND a.owner_id IN (${placeholders(page.length)}) ORDER BY a.sort_order`
+    ).bind(...page.map((row) => row.id)));
+    const map = new Map(items.map((item) => [item.id, item]));
+    for (const file of attachments) map.get(file.owner_id).attachments.push(fileJson(file));
+  }
+  const last = page[page.length - 1];
+  return { items, nextCursor: rows.length > 50 ? { updatedAt: last.updated_at, id: last.id } : null };
+}
+
+function normalizeResourceLinks(value) {
+  if (!Array.isArray(value) || value.length > 20) throw new AppError('링크는 최대 20개까지 저장할 수 있어요.', 'INVALID_LINK');
+  return Array.from(new Set(value.map((entry) => {
+    const text = String(entry || '').trim();
+    let url;
+    try { url = new URL(text); } catch (_) { /* Report a helpful validation error below. */ }
+    if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || text.length > 2048) {
+      throw new AppError('링크는 https:// 또는 http://로 시작하는 웹 주소를 입력해 주세요.', 'INVALID_LINK');
+    }
+    return url.href;
+  })));
+}
+
+async function upsertTeacherResource(env, session, payload) {
+  await ensureTeacherResourceSchema(env);
+  const existing = payload.id ? await ownedTeacherResource(env, session, payload.id) : null;
+  const title = String(payload.title || '').trim();
+  const body = String(payload.body || '').trim();
+  if (!title || title.length > 100) throw new AppError('제목은 1~100자로 입력해 주세요.', 'INVALID_TITLE');
+  if (body.length > 5000) throw new AppError('설명은 5,000자까지 입력할 수 있어요.', 'INVALID_BODY');
+  const links = normalizeResourceLinks(payload.links || []);
+  if (!Array.isArray(payload.files || []) || !Array.isArray(payload.keepAttachmentIds || [])) {
+    throw new AppError('첨부파일 정보를 확인해 주세요.', 'INVALID_UPLOAD');
+  }
+  // Validate new uploads before changing the resource or removing existing files.
+  const ids = (payload.files || []).map((file) => String(file.id || ''));
+  if (ids.length) {
+    const files = await all(env.DB.prepare(`SELECT * FROM files WHERE id IN (${placeholders(ids.length)})`).bind(...ids));
+    if (files.length !== ids.length || files.some((file) => file.uploader_role !== 'teacher' || file.uploader_id !== session.user_id || file.claimed_at)) {
+      throw new AppError('새로 업로드한 파일을 선택해 주세요.', 'INVALID_UPLOAD');
+    }
+  }
+  const id = existing ? existing.id : uid('resource');
+  const time = nowIso();
+  if (existing) {
+    await env.DB.prepare('UPDATE teacher_resources SET title=?,body=?,links=?,updated_at=? WHERE id=? AND teacher_id=?')
+      .bind(title, body, JSON.stringify(links), time, id, session.user_id).run();
+  } else {
+    await env.DB.prepare('INSERT INTO teacher_resources(id,teacher_id,title,body,links,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
+      .bind(id, session.user_id, title, body, JSON.stringify(links), time, time).run();
+  }
+  const attachments = await replaceAttachments(env, 'teacher_resource', id, payload.keepAttachmentIds, payload.files, session);
+  return { ...teacherResourceJson(await ownedTeacherResource(env, session, id)), attachments };
+}
+
+async function deleteTeacherResource(env, session, payload) {
+  await ensureTeacherResourceSchema(env);
+  const row = await ownedTeacherResource(env, session, payload.id);
+  await deleteOwnerFiles(env, 'teacher_resource', [row.id]);
+  await env.DB.prepare('DELETE FROM teacher_resources WHERE id=? AND teacher_id=?').bind(row.id, session.user_id).run();
+  return { deleted: true };
 }
 
 async function teacherSignup(env, payload) {
@@ -1664,6 +1778,12 @@ async function fileAccess(env, session, fileId) {
   }
   let classId = '';
   let studentId = '';
+  if (link.owner_type === 'teacher_resource') {
+    if (session.role !== 'teacher') throw new AppError('파일 접근 권한이 없습니다.', 'FORBIDDEN', 403);
+    await ensureTeacherResourceSchema(env);
+    await ownedTeacherResource(env, session, link.owner_id);
+    return { row, downloadAllowed: true };
+  }
   if (link.owner_type === 'guest_post') {
     const owner = await env.DB.prepare(
       'SELECT p.room_id,p.participant_id,r.teacher_id FROM guest_posts p JOIN guest_rooms r ON r.id=p.room_id WHERE p.id=?'
@@ -1947,6 +2067,7 @@ async function handleAction(request, env) {
   if (!(await schemaReady(env))) throw new AppError('먼저 교사 계정을 만들어 주세요.', 'SETUP_REQUIRED', 404);
   if (action === 'joinGuestRoom') return joinGuestRoom(env, payload);
   const teacherActions = new Set([
+    'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource',
     'teacherDashboard', 'createClass', 'updateClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
@@ -1963,6 +2084,9 @@ async function handleAction(request, env) {
   const session = await sessionFromToken(env, body.token, role);
 
   switch (action) {
+    case 'getTeacherResources': return getTeacherResources(env, session, payload);
+    case 'upsertTeacherResource': return upsertTeacherResource(env, session, payload);
+    case 'deleteTeacherResource': return deleteTeacherResource(env, session, payload);
     case 'teacherDashboard': return teacherDashboard(env, session);
     case 'getStorageStatus': return fileStorageStatus(env);
     case 'createClass': return createClass(env, session, payload);
@@ -2150,4 +2274,5 @@ export default {
     }
   }
 };
+
 

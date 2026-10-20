@@ -79,6 +79,11 @@
 
   function updateHeader(parts) {
     var area = parts[0] || '';
+    var resourcesLink = document.querySelector('[data-teacher-resources-link]');
+    if (resourcesLink) {
+      resourcesLink.hidden = area !== 'teacher' || !hasSession('teacher');
+      resourcesLink.classList.toggle('active', area === 'teacher' && parts[1] === 'resources');
+    }
     document.querySelectorAll('[data-role-link]').forEach(function (link) {
       if (area === 'guest') { link.hidden = true; return; }
       var teacherArea = area === 'teacher';
@@ -108,6 +113,8 @@
       renderTeacherAuth(false);
     } else if (parts[0] === 'teacher' && parts[1] === 'signup') {
       renderTeacherAuth(true);
+    } else if (parts[0] === 'teacher' && parts[1] === 'resources') {
+      window.TeacherViews.resourcesPage(app);
     } else if (parts[0] === 'teacher' && parts[1] === 'class' && parts[2]) {
       window.TeacherViews.classPage(app, parts[2], parts[3] || 'announcements');
     } else if (parts[0] === 'teacher' && parts[1] === 'quick' && parts[2]) {
@@ -314,3 +321,4 @@
   if (!location.hash) location.hash = resumeRoute();
   else render();
 })();
+

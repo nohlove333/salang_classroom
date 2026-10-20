@@ -70,7 +70,7 @@
     return '↧';
   }
 
-  function attachmentList(files, role, allowRemove) {
+  function attachmentList(files, role, allowRemove, context) {
     var list = files || [];
     if (!list.length) return '';
     return '<div class="attachment-list">' + list.map(function (file) {
@@ -78,7 +78,8 @@
         ? '<button type="button" class="attachment-remove" data-remove-attachment="' + attr(file.id) + '" aria-label="' + attr(file.name) + ' 제거">×</button>'
         : '';
       return '<button type="button" class="attachment-chip" data-file-id="' + attr(file.id) +
-        '" data-file-role="' + attr(role || '') + '" data-file-json="' + attr(encodeURIComponent(JSON.stringify(file))) + '">' +
+        '" data-file-role="' + attr(role || '') + '" data-file-json="' + attr(encodeURIComponent(JSON.stringify(file))) + '"' +
+        (context ? ' data-preview-context="' + attr(encodeURIComponent(JSON.stringify(context))) + '"' : '') + '>' +
         '<strong>' + escapeHtml(fileGlyph(file)) + '</strong><span>' + escapeHtml(file.name) + '</span>' +
         (file.size ? '<small>' + escapeHtml(fileSize(file.size)) + '</small>' : '') + remove + '</button>';
     }).join('') + '</div>';
@@ -448,7 +449,7 @@
     if (mayDownload) {
       actionButtons += '<button class="button secondary" type="button" data-download-file>컴퓨터에 저장</button>';
     }
-    if (role === 'teacher' && mayDownload) {
+    if (role === 'teacher' && mayDownload && (!context || context.allowArchive !== false)) {
       actionButtons += '<button class="button soft" type="button" data-archive-file>Google Drive로 보관</button>';
     }
     var dialog = openModal({
@@ -721,3 +722,4 @@
     empty: emptyState
   };
 })();
+
