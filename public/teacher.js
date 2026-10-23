@@ -6,9 +6,9 @@
   var dashboardData = null;
   var classData = null;
   var classDataId = '';
-  var presenceTimer = null;
-  var presenceVisibilityHandler = null;
-  var presenceBusy = false;
+  var classSyncTimer = null;
+  var classSyncVisibilityHandler = null;
+  var classSyncBusy = false;
   var classRefreshBusy = false;
   var storageLastCheckedAt = 0;
   var storageAlertStorageKey = 'learn_storage_alert_v1';
@@ -65,7 +65,7 @@
 
   async function renderDashboard(container, forceRefresh) {
     if (!sessionOrLogin()) return;
-    stopPresence();
+    stopClassSync();
     if (dashboardData && !forceRefresh) {
       paintDashboard(container, dashboardData);
       refreshDashboardStorage(container);
@@ -180,7 +180,7 @@
       resourceCategories = [];
       append = false;
     }
-    stopPresence();
+    stopClassSync();
     var version = ++resourceLoadVersion;
     if (!append) loading(container, '교사 자료를 불러오고 있어요.');
     var moreButton = container.querySelector('[data-more-resources]');
@@ -727,12 +727,12 @@
   async function renderClass(container, classId, tab, forceRefresh) {
     if (!sessionOrLogin()) return;
     activeClassContainer = container;
-    stopPresence();
+    stopClassSync();
     var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'ideas', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
     activeClassTab = safeTab;
     if (classData && classDataId === String(classId) && !forceRefresh) {
       paintClass(container, classId, safeTab);
-      startPresence(classId);
+      startClassSync(classId);
       return;
     }
     var refreshingCurrentClass = classData && classDataId === String(classId);
@@ -742,7 +742,7 @@
       classData = await API.request('getTeacherClass', { classId: classId }, 'teacher');
       classDataId = String(classId);
       paintClass(container, classId, safeTab);
-      startPresence(classId);
+      startClassSync(classId);
     } catch (error) {
       errorScreen(container, error, function () { renderClass(container, classId, safeTab, true); });
     }
@@ -807,7 +807,6 @@
             '</nav>' +
             '<section class="panel content-panel">' + renderTab(tab, classId) + '</section>' +
           '</div>' +
-          renderPresence(classData.onlineStudents || []) +
         '</div>' +
       '</section>';
     container.querySelector('[data-back-dashboard]').addEventListener('click', function () {
@@ -948,22 +947,6 @@
     } catch (error) {
       UI.toast(error.message, 'error');
     }
-  }
-
-  function renderPresence(students) {
-    return '<aside class="panel presence-panel" aria-label="접속 중인 학생">' +
-      '<div class="presence-head"><h2>접속 중</h2><span class="online-count" data-online-count>' +
-        UI.escape(students.length) + '명</span></div>' +
-      '<div class="presence-list" data-presence-list>' + presenceRows(students) + '</div>' +
-    '</aside>';
-  }
-
-  function presenceRows(students) {
-    if (!students.length) return '<p style="color:var(--muted);font-size:.82rem">현재 접속 중인 학생이 없어요.</p>';
-    return students.map(function (student) {
-      return '<div class="presence-person"><span class="presence-avatar">' + UI.escape(student.number) + '</span>' +
-        '<span>' + UI.escape(student.name) + '</span><span class="presence-dot" aria-label="접속 중"></span></div>';
-    }).join('');
   }
 
   function renderTab(tab, classId) {
@@ -1168,7 +1151,6 @@
     var rows = classData.students.map(function (student) {
       return '<tr><td><strong>' + UI.escape(student.number) + '</strong></td><td>' + UI.escape(student.name) + '</td>' +
         '<td><span class="pin-code">••••</span></td>' +
-        '<td>' + (student.online ? '<span class="status-badge open">접속 중</span>' : '<span style="color:var(--muted)">오프라인</span>') + '</td>' +
         '<td><div class="inline-actions"><button class="button ghost small" type="button" data-reset-pin="' + UI.attr(student.id) +
           '" data-student-label="' + UI.attr(student.number + '번 ' + student.name) + '">비밀번호 재발급</button>' +
           '<button class="text-link" type="button" data-delete-student="' + UI.attr(student.id) +
@@ -1179,7 +1161,7 @@
         (classData.students.length ? '<button class="button secondary" type="button" data-reissue-class-pins>전체 로그인표 새로 발급</button>' : '') +
         '<button class="button" type="button" data-add-students>＋ 학생 등록</button></div></div>' +
       (classData.students.length
-        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>상태</th><th>관리</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>번호</th><th>이름</th><th>비밀번호</th><th>관리</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
         : UI.empty('등록된 학생이 없어요', '한 반 30명을 한 번에 등록할 수 있어요.', '<button class="button secondary" type="button" data-add-students>학생 등록</button>'));
   }
 
@@ -2000,35 +1982,31 @@
     }
   }
 
-  function startPresence(classId) {
-    /* 화면의 1초 카운트다운은 유지하고 접속/변경 동기화 타이머만 교체합니다. */
-    if (presenceTimer) presenceTimer();
-    if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
-    presenceTimer = null;
-    presenceVisibilityHandler = null;
-    presenceBusy = false;
+  function startClassSync(classId) {
+    /* 화면의 1초 카운트다운은 유지하고 변경 확인 타이머만 교체합니다. */
+    if (classSyncTimer) classSyncTimer();
+    if (classSyncVisibilityHandler) document.removeEventListener('visibilitychange', classSyncVisibilityHandler);
+    classSyncTimer = null;
+    classSyncVisibilityHandler = null;
+    classSyncBusy = false;
     function heartbeat() {
-      if (presenceBusy) return;
-      presenceBusy = true;
+      if (classSyncBusy) return;
+      classSyncBusy = true;
       checkStorageStatus();
       return API.request('heartbeat', { classId: classId, knownVersion: classData && classData.classInfo.version }, 'teacher', 0).then(function (response) {
         if (classData && response && response.version != null &&
             Number(response.version) !== Number(classData.classInfo.version)) {
           return refreshClassSilently(classId, response.classData);
         }
-        var list = document.querySelector('[data-presence-list]');
-        var count = document.querySelector('[data-online-count]');
-        if (list && response.onlineStudents) list.innerHTML = presenceRows(response.onlineStudents);
-        if (count && response.onlineStudents) count.textContent = response.onlineStudents.length + '명';
-      }).finally(function () { presenceBusy = false; });
+      }).finally(function () { classSyncBusy = false; });
     }
     var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
-    presenceTimer = window.LearnSync.start(heartbeat, { interval: syncMilliseconds });
+    classSyncTimer = window.LearnSync.start(heartbeat, { interval: syncMilliseconds });
   }
 
   async function renderGuestRoom(container, roomId, tab, forceRefresh) {
     if (!sessionOrLogin()) return;
-    stopPresence();
+    stopClassSync();
     guestRoomContainer = container;
     guestRoomTab = ['opinion', 'board', 'cloud'].indexOf(tab) >= 0 ? tab : 'opinion';
     if (!forceRefresh && guestRoomData && guestRoomId === String(roomId)) {
@@ -2375,12 +2353,12 @@
     });
   }
 
-  function stopPresence() {
-    if (presenceTimer) presenceTimer();
-    if (presenceVisibilityHandler) document.removeEventListener('visibilitychange', presenceVisibilityHandler);
-    presenceTimer = null;
-    presenceVisibilityHandler = null;
-    presenceBusy = false;
+  function stopClassSync() {
+    if (classSyncTimer) classSyncTimer();
+    if (classSyncVisibilityHandler) document.removeEventListener('visibilitychange', classSyncVisibilityHandler);
+    classSyncTimer = null;
+    classSyncVisibilityHandler = null;
+    classSyncBusy = false;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
     if (guestRoomTimer) guestRoomTimer();
@@ -2399,7 +2377,7 @@
     resourcesPage: renderResources,
     classPage: renderClass,
     guestRoomPage: renderGuestRoom,
-    stop: stopPresence
+    stop: stopClassSync
   };
 })();
 
