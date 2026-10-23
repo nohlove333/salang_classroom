@@ -7,6 +7,8 @@
   var selectedBoards = {};
   var heartbeatTimer = null;
   var heartbeatVisibilityHandler = null;
+  var heartbeatFallbackTimer = null;
+  var studentDataOwnerKey = '';
   var studentPostFilters = { type: 'all', category: 'all' };
   var selectedIdeas = {};
   var ideaGroupViews = {};
@@ -34,6 +36,14 @@
   var session = sessionOrLogin();
   if (!session) return;
 
+  var ownerKey = String(session.user && session.user.id || '') + ':' + String(session.classInfo && session.classInfo.id || '');
+  if (studentDataOwnerKey !== ownerKey) {
+    studentDataOwnerKey = ownerKey;
+    studentData = session.classInfo && session.classInfo.id
+      ? API.getClassCache('student', session.user && session.user.id, session.classInfo.id)
+      : null;
+  }
+
   activeContainer = container;
 
   stopHeartbeat();
@@ -55,6 +65,7 @@
 
   try {
     studentData = await API.request('getStudentClass', {}, 'student');
+    API.setClassCache('student', session.user && session.user.id, studentData.classInfo.id, studentData);
     paintClass(container, safeTab, session);
     startHeartbeat(studentData.classInfo.id);
   } catch (error) {
@@ -63,6 +74,11 @@
       if (window.LearnNavigation) window.LearnNavigation.clear('student');
       if (location.hash === '#/student/login') window.dispatchEvent(new Event('hashchange'));
       else location.hash = '#/student/login';
+      return;
+    }
+    if (studentData && session.classInfo && String(studentData.classInfo.id) === String(session.classInfo.id)) {
+      paintClass(container, safeTab, session);
+      startHeartbeat(studentData.classInfo.id);
       return;
     }
     container.innerHTML =
@@ -95,6 +111,7 @@
     var scrollY = window.scrollY;
     try {
       studentData = latest || await API.request('getStudentClass', {}, 'student', 1);
+      API.setClassCache('student', session.user && session.user.id, studentData.classInfo.id, studentData);
       paintClass(activeContainer, activeTab, session);
       window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
     } catch (error) {
@@ -911,7 +928,8 @@
 
   function startHeartbeat(classId) {
     /* 화면의 1초 카운트다운은 유지하고 서버 동기화 타이머만 교체합니다. */
-    if (heartbeatTimer) heartbeatTimer();
+    if (heartbeatTimer && heartbeatTimer.stop) heartbeatTimer.stop();
+    if (heartbeatFallbackTimer) heartbeatFallbackTimer();
     if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
     heartbeatTimer = null;
     heartbeatVisibilityHandler = null;
@@ -942,8 +960,9 @@
       window.requestAnimationFrame(function () { window.scrollTo(scrollX, scrollY); });
     }
 
+    var heartbeatAgain = false;
     function beat() {
-      if (heartbeatBusy) return;
+      if (heartbeatBusy) { heartbeatAgain = true; return Promise.resolve(); }
       heartbeatBusy = true;
       return API.request('heartbeat', { classId: classId, knownVersion: studentData && studentData.classInfo.version }, 'student', 0).then(function (response) {
         var reviewChanged = applyBoardReviews(response && response.boardReviews);
@@ -952,16 +971,24 @@
             Number(response.version) !== Number(studentData.classInfo.version)) {
           return refreshClassSilently(response.classData);
         }
-      }).finally(function () { heartbeatBusy = false; });
+      }).finally(function () {
+        heartbeatBusy = false;
+        if (heartbeatAgain) { heartbeatAgain = false; window.setTimeout(beat, 0); }
+      });
     }
-    var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
-    heartbeatTimer = window.LearnSync.start(beat, { interval: syncMilliseconds });
+    var syncMilliseconds = Math.max(60000, Number((window.LEARN_CONFIG || {}).syncSeconds || 60) * 1000);
+    heartbeatTimer = API.connectClassSync('student', classId, beat);
+    heartbeatFallbackTimer = window.LearnSync.start(function () {
+      if (!heartbeatTimer || !heartbeatTimer.isOpen()) return beat();
+    }, { interval: syncMilliseconds, immediate: false });
   }
 
   function stopHeartbeat() {
-    if (heartbeatTimer) heartbeatTimer();
+    if (heartbeatTimer && heartbeatTimer.stop) heartbeatTimer.stop();
+    if (heartbeatFallbackTimer) heartbeatFallbackTimer();
     if (heartbeatVisibilityHandler) document.removeEventListener('visibilitychange', heartbeatVisibilityHandler);
     heartbeatTimer = null;
+    heartbeatFallbackTimer = null;
     heartbeatVisibilityHandler = null;
     heartbeatBusy = false;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);

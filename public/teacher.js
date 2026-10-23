@@ -7,6 +7,8 @@
   var classData = null;
   var classDataId = '';
   var classSyncTimer = null;
+  var classSyncFallbackTimer = null;
+  var classDataOwnerId = '';
   var classSyncVisibilityHandler = null;
   var classSyncBusy = false;
   var classRefreshBusy = false;
@@ -725,11 +727,17 @@
   }
 
   async function renderClass(container, classId, tab, forceRefresh) {
-    if (!sessionOrLogin()) return;
+    var session = sessionOrLogin();
+    if (!session) return;
     activeClassContainer = container;
     stopClassSync();
     var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'ideas', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
     activeClassTab = safeTab;
+    if (classDataOwnerId !== String(session.user && session.user.id || '') || classDataId !== String(classId)) {
+      classDataOwnerId = String(session.user && session.user.id || '');
+      classData = API.getClassCache('teacher', session.user && session.user.id, classId);
+      classDataId = classData ? String(classId) : '';
+    }
     if (classData && classDataId === String(classId) && !forceRefresh) {
       paintClass(container, classId, safeTab);
       startClassSync(classId);
@@ -741,10 +749,16 @@
     try {
       classData = await API.request('getTeacherClass', { classId: classId }, 'teacher');
       classDataId = String(classId);
+      API.setClassCache('teacher', session.user && session.user.id, classId, classData);
       paintClass(container, classId, safeTab);
       startClassSync(classId);
     } catch (error) {
-      errorScreen(container, error, function () { renderClass(container, classId, safeTab, true); });
+      if (classData && classDataId === String(classId)) {
+        paintClass(container, classId, safeTab);
+        startClassSync(classId);
+      } else {
+        errorScreen(container, error, function () { renderClass(container, classId, safeTab, true); });
+      }
     }
   }
 
@@ -757,6 +771,8 @@
       latest = latest || await API.request('getTeacherClass', { classId: classId }, 'teacher', 1);
       classData = latest;
       classDataId = String(classId);
+      var session = sessionOrLogin();
+      if (session) API.setClassCache('teacher', session.user && session.user.id, classId, classData);
       paintClass(activeClassContainer, classId, activeClassTab);
       if (teacherIdeaModalState && teacherIdeaModalState.dialog && teacherIdeaModalState.dialog.isConnected) {
         paintTeacherIdeaModal(teacherIdeaModalState, classId, activeClassContainer, activeClassTab);
@@ -1984,13 +2000,15 @@
 
   function startClassSync(classId) {
     /* 화면의 1초 카운트다운은 유지하고 변경 확인 타이머만 교체합니다. */
-    if (classSyncTimer) classSyncTimer();
+    if (classSyncTimer && classSyncTimer.stop) classSyncTimer.stop();
+    if (classSyncFallbackTimer) classSyncFallbackTimer();
     if (classSyncVisibilityHandler) document.removeEventListener('visibilitychange', classSyncVisibilityHandler);
     classSyncTimer = null;
     classSyncVisibilityHandler = null;
     classSyncBusy = false;
+    var syncAgain = false;
     function heartbeat() {
-      if (classSyncBusy) return;
+      if (classSyncBusy) { syncAgain = true; return Promise.resolve(); }
       classSyncBusy = true;
       checkStorageStatus();
       return API.request('heartbeat', { classId: classId, knownVersion: classData && classData.classInfo.version }, 'teacher', 0).then(function (response) {
@@ -1998,10 +2016,16 @@
             Number(response.version) !== Number(classData.classInfo.version)) {
           return refreshClassSilently(classId, response.classData);
         }
-      }).finally(function () { classSyncBusy = false; });
+      }).finally(function () {
+        classSyncBusy = false;
+        if (syncAgain) { syncAgain = false; window.setTimeout(heartbeat, 0); }
+      });
     }
-    var syncMilliseconds = Math.max(8000, Number((window.LEARN_CONFIG || {}).syncSeconds || 10) * 1000);
-    classSyncTimer = window.LearnSync.start(heartbeat, { interval: syncMilliseconds });
+    var syncMilliseconds = Math.max(60000, Number((window.LEARN_CONFIG || {}).syncSeconds || 60) * 1000);
+    classSyncTimer = API.connectClassSync('teacher', classId, heartbeat);
+    classSyncFallbackTimer = window.LearnSync.start(function () {
+      if (!classSyncTimer || !classSyncTimer.isOpen()) return heartbeat();
+    }, { interval: syncMilliseconds, immediate: false });
   }
 
   async function renderGuestRoom(container, roomId, tab, forceRefresh) {
@@ -2354,9 +2378,11 @@
   }
 
   function stopClassSync() {
-    if (classSyncTimer) classSyncTimer();
+    if (classSyncTimer && classSyncTimer.stop) classSyncTimer.stop();
+    if (classSyncFallbackTimer) classSyncFallbackTimer();
     if (classSyncVisibilityHandler) document.removeEventListener('visibilitychange', classSyncVisibilityHandler);
     classSyncTimer = null;
+    classSyncFallbackTimer = null;
     classSyncVisibilityHandler = null;
     classSyncBusy = false;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
