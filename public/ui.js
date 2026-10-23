@@ -165,6 +165,7 @@
     clearObjectUrls();
     modalRoot.innerHTML = '';
     document.body.style.overflow = '';
+    document.dispatchEvent(new CustomEvent('learn:modalclosed'));
   }
 
   function openModal(options) {
@@ -722,4 +723,5 @@
     empty: emptyState
   };
 })();
+
 

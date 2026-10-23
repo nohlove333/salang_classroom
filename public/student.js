@@ -18,6 +18,15 @@
   var studentRefreshBusy = false;
   var countdownTimer = null;
   var boardNoticeOpen = {};
+  var pendingClassRefresh = null;
+
+  document.addEventListener('learn:modalclosed', function () {
+    if (!pendingClassRefresh || document.querySelector('.modal')) return;
+    var pending = pendingClassRefresh;
+    pendingClassRefresh = null;
+    if (location.hash.indexOf('#/student/class/') !== 0) return;
+    refreshClassSilently(pending.data);
+  });
 
   function sessionOrLogin() {
     var session = window.LearnSession.get('student');
@@ -100,6 +109,10 @@
   }
 
   async function refreshClassSilently(latest) {
+    if (document.querySelector('.modal')) {
+      pendingClassRefresh = { data: latest || null };
+      return;
+    }
     if (studentRefreshBusy || !activeContainer || !activeContainer.isConnected) return;
     studentRefreshBusy = true;
     var session = sessionOrLogin();
@@ -961,7 +974,17 @@
     }
 
     var heartbeatAgain = false;
-    function beat() {
+    function beat(event) {
+      if (event && event.type === 'class-deleted' && String(event.classId) === String(classId)) {
+        stopHeartbeat();
+        window.LearnSession.clear('student');
+        if (window.LearnNavigation) window.LearnNavigation.clear('student');
+        UI.toast('클래스가 삭제되었습니다. 로그인 화면으로 이동합니다.', 'error');
+        location.hash = '#/student/login';
+        return Promise.resolve();
+      }
+      if (event && event.version != null && studentData &&
+          Number(event.version) <= Number(studentData.classInfo.version || 0)) return Promise.resolve();
       if (heartbeatBusy) { heartbeatAgain = true; return Promise.resolve(); }
       heartbeatBusy = true;
       return API.request('heartbeat', { classId: classId, knownVersion: studentData && studentData.classInfo.version }, 'student', 0).then(function (response) {
@@ -991,6 +1014,7 @@
     heartbeatFallbackTimer = null;
     heartbeatVisibilityHandler = null;
     heartbeatBusy = false;
+    pendingClassRefresh = null;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
   }
@@ -1032,4 +1056,5 @@
     editAttachment: editAttachmentOwner
   };
 })();
+
 
