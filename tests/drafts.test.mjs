@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFile} from 'node:fs/promises';
+let auth={token:'a'},values=[{name:'title',type:'text',value:'original'},{name:'password',type:'password',value:'SECRET'},{name:'upload',type:'file',value:'secret-file'},{name:'body',type:'textarea',value:'body'}];
+const store=new Map(),events={};let notice;
+const form={isConnected:true,querySelectorAll:()=>values,prepend:x=>{notice=x},addEventListener:(name,fn)=>events[name]=fn};const dialog={isConnected:true,querySelector:()=>form};
+const context=vm.createContext({window:{LearnSession:{get:()=>auth}},location:{hash:'#/teacher/class/c/posts'},crypto,TextEncoder,localStorage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},document:{createElement:()=>({textContent:'',setAttribute(){},appendChild(){}})}});
+vm.runInContext(await readFile(new URL('../public/drafts.js',import.meta.url),'utf8'),context);
+const d=context.window.LearnDrafts;await d.attach(dialog,{key:'edit:1',actions:['upsertContent']});values[0].value='draft';events.input();assert.equal(store.size,1);assert.ok(![...store.values()][0].includes('SECRET'));assert.ok(![...store.values()][0].includes('secret-file'));
+assert.equal(d.begin('getTeacherClass'),null);const pending=d.begin('upsertContent');values[0].value='typed during request';d.complete(pending);assert.equal(store.size,1);d.complete(d.begin('upsertContent'));assert.equal(store.size,0);
+values[0].value='closed pending';events.input();const closedPending=d.begin('upsertContent');form.isConnected=false;d.complete(closedPending);assert.equal(store.size,1);form.isConnected=true;
+values[0].value='keep';events.input();auth={token:'b'};assert.equal(d.begin('upsertContent'),null);assert.equal(store.size,1);
+const fields=d.capture(form);values[0].value='changed';d.restore(form,fields);assert.equal(values[0].value,'keep');
+console.log('PASS: drafts exclude credentials/files, survive failed requests and typing during save, clear only matching successful save, isolate sessions.');

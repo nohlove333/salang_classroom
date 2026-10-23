@@ -302,7 +302,7 @@
     if (moreButton) UI.busy(moreButton, true, '불러오는 중…');
     try {
       var data = await API.request('getTeacherResources', {
-        cursor: append ? resourceCursor : null, category: resourceCategoryFilter, search: resourceSearch
+        cursor: append ? resourceCursor : null, category: resourceCategoryFilter, search: resourceSearch, includeDescendants: true
       }, 'teacher');
       if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
       resourceItems = append ? resourceItems.concat(data.items) : data.items;
@@ -354,6 +354,7 @@
         : (resourceSearch ? UI.empty('검색 결과가 없어요', '제목 앞부분을 짧게 바꾸거나 카테고리 필터를 확인해 보세요.')
           : UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.'))) + '</div>') +
       (resourceCursor ? '<div class="teacher-resource-more"><button class="button secondary" type="button" data-more-resources>자료 더 보기</button></div>' : '') + '</section>';
+    if (window.LearnCategories) { var tree = document.createElement('div'); tree.innerHTML = '<button class="button secondary" type="button" data-resource-categories>카테고리 관리</button>' + window.LearnCategories.html(resourceCategories, resourceCategoryFilter || 'all'); container.querySelector('.teacher-resource-filter').appendChild(tree); window.LearnCategories.bind(tree, function (path) { resourceCategoryFilter = path === 'all' ? null : path; renderResources(container); }); tree.querySelector('[data-resource-categories]').onclick = function () { window.LearnCategories.manage('resources', '', resourceCategories, function () { resourceCategoryFilter = null; renderResources(container); }); }; }
     container.querySelector('[data-add-resource]').addEventListener('click', function () { openResourceEditor(null, container); });
     container.querySelector('[data-refresh-resources]').addEventListener('click', function () { renderResources(container); });
     container.querySelector('[data-resource-category-filter]').addEventListener('change', function (event) {
@@ -418,6 +419,7 @@
           '<strong>파일을 끌어놓거나 눌러서 선택</strong><span>파일당 최대 ' + UI.escape((window.LEARN_CONFIG || {}).maxFileSizeMb || 25) + 'MB · 여러 개 선택 가능</span></label>' +
           '<div class="selected-files" data-selected-files></div></div>' +
         '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">저장</button></div></form>' });
+    if (window.LearnDrafts) window.LearnDrafts.attach(dialog, { key: 'resource:' + (value.id || 'new'), actions: ['upsertTeacherResource'] });
     var picker = UI.filePicker(dialog, value.attachments || []);
     dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
     dialog.querySelector('[data-resource-form]').addEventListener('submit', async function (event) {
@@ -955,6 +957,8 @@
                 '<button class="button secondary small" type="button" data-share-student-link>학생 링크 공유</button>' +
                 '<button class="button secondary small" type="button" data-copy-code>코드 복사</button>' +
                 '<button class="button secondary small" type="button" data-open-timer>⏱ 타이머</button>' +
+                '<button class="button secondary small" type="button" data-manage-categories>카테고리 관리</button>' +
+                '<button class="button secondary small" type="button" data-class-archive>수업 보관 파일</button>' +
                 '<button class="button small" type="button" data-refresh>새로고침</button></div>' +
             '</header>' +
             timerBanner(classData.timer, true) +
@@ -993,6 +997,8 @@
     container.querySelector('[data-refresh]').addEventListener('click', function () {
       renderClass(container, classId, tab, true);
     });
+    container.querySelector('[data-manage-categories]').addEventListener('click', function () { window.LearnCategories.manage('class', classId, [...(classData.categories || []), ...['announcements','assignments','boards','ideas'].flatMap(function (k) { return classData[k].map(function (x) { return x.category; }); })], function () { renderClass(container, classId, tab, true); }); });
+    container.querySelector('[data-class-archive]').addEventListener('click', function () { window.LearnArchive.open(classId); });
     container.querySelector('[data-open-timer]').addEventListener('click', function () {
       openTimerEditor(classId, container, tab);
     });
@@ -1179,12 +1185,13 @@
     var categories = Array.from(new Set(entries.map(function (entry) {
       return contentCategory(entry.item);
     }))).sort(function (a, b) { return a.localeCompare(b, 'ko'); });
+    if (window.LearnCategories) categories = window.LearnCategories.paths([...( classData.categories || []), ...categories]);
     if (teacherPostFilters.category !== 'all' && categories.indexOf(teacherPostFilters.category) < 0) {
       teacherPostFilters.category = 'all';
     }
     var filtered = entries.filter(function (entry) {
       var typeMatch = teacherPostFilters.type === 'all' || entry.type === teacherPostFilters.type;
-      var categoryMatch = teacherPostFilters.category === 'all' || contentCategory(entry.item) === teacherPostFilters.category;
+      var categoryMatch = window.LearnCategories ? window.LearnCategories.matches(contentCategory(entry.item), teacherPostFilters.category) : (teacherPostFilters.category === 'all' || contentCategory(entry.item) === teacherPostFilters.category);
       return typeMatch && categoryMatch;
     });
     var typeOptions = filterOption('all', '전체 글', teacherPostFilters.type) +
@@ -1198,6 +1205,7 @@
       '<span class="post-result-count">' + filtered.length + '개</span></div>' +
       '<div class="post-filter-bar"><label><span>글 종류</span><select data-post-type-filter>' + typeOptions + '</select></label>' +
         '<label><span>카테고리</span><select data-post-category-filter>' + categoryOptions + '</select></label></div>';
+    if (window.LearnCategories) head += window.LearnCategories.html(categories, teacherPostFilters.category);
     if (!filtered.length) return head + UI.empty('조건에 맞는 글이 없어요', '다른 글 종류나 카테고리를 선택해 보세요.');
     return head + '<div class="blog-list">' + filtered.map(teacherPostIndexCard).join('') + '</div>';
   }
@@ -1361,6 +1369,7 @@
       teacherPostFilters.type = postTypeFilter.value;
       paintClass(container, classId, tab);
     });
+    if (window.LearnCategories) window.LearnCategories.bind(container, function (path) { teacherPostFilters.category = path; paintClass(container, classId, tab); });
     var postCategoryFilter = container.querySelector('[data-post-category-filter]');
     if (postCategoryFilter) postCategoryFilter.addEventListener('change', function () {
       teacherPostFilters.category = postCategoryFilter.value;
@@ -1491,6 +1500,7 @@
         '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button>' +
           '<button class="button" type="submit">' + (item ? '수정 저장' : '등록') + '</button></div></form>'
     });
+    if (window.LearnDrafts) window.LearnDrafts.attach(dialog, { key: 'content:' + type + ':' + (item ? item.id : 'new'), actions: ['upsertContent'] });
     var picker = UI.filePicker(dialog, item ? item.attachments : []);
     dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
     dialog.querySelector('[data-content-form]').addEventListener('submit', async function (event) {

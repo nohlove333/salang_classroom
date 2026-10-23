@@ -291,12 +291,13 @@
     var categories = Array.from(new Set(entries.map(function (entry) {
       return contentCategory(entry.item);
     }))).sort(function (a, b) { return a.localeCompare(b, 'ko'); });
+    if (window.LearnCategories) categories = window.LearnCategories.paths([...( studentData.categories || []), ...categories]);
     if (studentPostFilters.category !== 'all' && categories.indexOf(studentPostFilters.category) < 0) {
       studentPostFilters.category = 'all';
     }
     var filtered = entries.filter(function (entry) {
       return (studentPostFilters.type === 'all' || entry.type === studentPostFilters.type) &&
-        (studentPostFilters.category === 'all' || contentCategory(entry.item) === studentPostFilters.category);
+        (window.LearnCategories ? window.LearnCategories.matches(contentCategory(entry.item), studentPostFilters.category) : (studentPostFilters.category === 'all' || contentCategory(entry.item) === studentPostFilters.category));
     });
     var typeOptions = filterOption('all', '전체 글', studentPostFilters.type) +
       filterOption('announcement', '공지', studentPostFilters.type) +
@@ -309,6 +310,7 @@
       '<span class="post-result-count">' + filtered.length + '개</span></div>' +
       '<div class="post-filter-bar"><label><span>글 종류</span><select data-post-type-filter>' + typeOptions + '</select></label>' +
         '<label><span>카테고리</span><select data-post-category-filter>' + categoryOptions + '</select></label></div>';
+    if (window.LearnCategories) head += window.LearnCategories.html(categories, studentPostFilters.category);
     if (!filtered.length) return head + UI.empty('조건에 맞는 글이 없어요', '다른 글 종류나 카테고리를 선택해 보세요.');
     return head + '<div class="blog-list">' + filtered.map(studentPostIndexCard).join('') + '</div>';
   }
@@ -596,6 +598,7 @@
       studentPostFilters.type = postTypeFilter.value;
       paintClass(container, tab, session);
     });
+    if (window.LearnCategories) window.LearnCategories.bind(container, function (path) { studentPostFilters.category = path; paintClass(container, tab, session); });
     var postCategoryFilter = container.querySelector('[data-post-category-filter]');
     if (postCategoryFilter) postCategoryFilter.addEventListener('change', function () {
       studentPostFilters.category = postCategoryFilter.value;

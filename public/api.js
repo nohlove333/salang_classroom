@@ -303,6 +303,7 @@
       throw new ApiError('오늘의 무료 사용 한도에 도달했습니다. 한국 시간 다음 오전 9시 이후 다시 시도해 주세요.', 'DAILY_LIMIT_EXCEEDED', { retryAt: new Date(requestBlockedUntil).toISOString() });
     }
 
+    var draftCommit = window.LearnDrafts && window.LearnDrafts.begin(action, payload);
     var session = role ? readSession(role) : null;
     var body = {
       action: action,
@@ -344,6 +345,7 @@
           result && result.details ? result.details : null
         );
       }
+      if (window.LearnDrafts) window.LearnDrafts.complete(draftCommit);
       return result.data;
     } catch (error) {
       var transient = !error.code || error.code.indexOf('HTTP_5') === 0 || error.code === 'BUSY';

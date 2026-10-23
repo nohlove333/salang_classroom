@@ -3964,3 +3964,5 @@ body {
   .post-reactions { gap: 5px; }
   .reaction-button { min-height: 36px; padding: 0 8px; }
 }
+
+.category-tree{background:#f8f5fc;border:1px solid #e7def0;border-radius:14px;padding:12px;margin:12px 0 20px;font-size:13px}.category-tree ul{list-style:none;margin:5px 0;padding-left:18px}.category-tree>ul{padding-left:0}.category-tree li{margin:4px 0}.category-tree button{border:0;border-radius:7px;background:transparent;padding:5px 9px;color:#756082;cursor:pointer;text-align:left;overflow-wrap:anywhere}.category-tree button.selected{background:#e6d8f1;font-weight:bold}.category-tree summary{cursor:pointer}.category-order-row{display:flex;justify-content:space-between;gap:10px;padding:8px;border-bottom:1px solid #eee}.draft-notice button{margin:4px;border:1px solid #e1d7ed;border-radius:8px;padding:5px 10px;background:#faf6ff}

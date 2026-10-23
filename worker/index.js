@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-24-v64';
+const RELEASE = '2026-10-24-v65';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -831,6 +831,7 @@ async function readClassSnapshot(env, classId, studentId = '') {
     .map((item) => ({ ...item, responseCount: ideaPostCounts.get(item.id) || 0 }));
   return {
     classInfo: classJson(classRow),
+    categories: await categoryLabels(env, classRow.teacher_id, 'class:' + classId),
     students,
     announcements,
     assignments,
@@ -989,7 +990,7 @@ async function getTeacherResources(env, session, payload) {
   }
   const conditions = ['teacher_id=?'];
   const bindings = [session.user_id];
-  if (category !== null) { conditions.push('category=?'); bindings.push(category); }
+  if (category !== null) { if(payload.includeDescendants && category) { conditions.push('(category=? OR (category>=? AND category<?))'); bindings.push(category,category+' / ',category+' / \uffff'); } else { conditions.push('category=?'); bindings.push(category); } }
   if (search) {
     conditions.push('title LIKE ? COLLATE NOCASE');
     bindings.push(search + '%');
@@ -1016,7 +1017,9 @@ async function getTeacherResources(env, session, payload) {
   const categories = !cursor ? (await all(env.DB.prepare(
     "SELECT DISTINCT category FROM teacher_resources WHERE teacher_id=? AND category<>'' ORDER BY category"
   ).bind(session.user_id))).map((row) => row.category) : undefined;
-  return { items, categories, nextCursor: rows.length > 50 ? { updatedAt: last.updated_at, id: last.id } : null };
+  const categoryTree = !cursor ? await categoryLabels(env, session.user_id, 'resources') : undefined;
+  const combined = categories ? Array.from(new Set([...(categoryTree || []).map(x => x.path), ...categories])) : undefined;
+  return { items, categories: combined, categoryTree, nextCursor: rows.length > 50 ? { updatedAt: last.updated_at, id: last.id } : null };
 }
 
 function normalizeResourceCategory(value) {
@@ -2328,7 +2331,7 @@ async function handleAction(request, env) {
   if (/^(workspace|calendar)/.test(action)) return workspaceAction(request, env, await sessionFromToken(env, body.token, 'teacher'), action, payload);
   if (action === 'joinGuestRoom') return joinGuestRoom(env, payload);
   const teacherActions = new Set([
-    'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource',
+    'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource', 'exportClassArchive', 'manageCategory',
     'teacherDashboard', 'createClass', 'updateClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'getBulkContentTargets', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
@@ -2345,6 +2348,8 @@ async function handleAction(request, env) {
   const session = await sessionFromToken(env, body.token, role);
 
   switch (action) {
+    case 'manageCategory': return manageCategory(env, session, payload);
+    case 'exportClassArchive': return exportClassArchive(env, request, session, payload);
     case 'getTeacherResources': return getTeacherResources(env, session, payload);
     case 'upsertTeacherResource': return upsertTeacherResource(env, session, payload);
     case 'deleteTeacherResource': return deleteTeacherResource(env, session, payload);
@@ -2518,7 +2523,7 @@ export default {
       if (url.pathname === '/api/calendar/callback' && request.method === 'GET') return await calendarCallback(request, env);
       if (url.pathname === '/api/health') {
         const databaseReady = await schemaReady(env);
-        if (databaseReady) await ensureWorkspace(env);
+        if (databaseReady) { await ensureWorkspace(env); await ensureCategorySchema(env); }
         return ok({
           status: 'ok',
           databaseReady,
@@ -2527,6 +2532,7 @@ export default {
           provider: 'cloudflare',
           release: RELEASE,
           workspaceSchemaReady: databaseReady,
+          categorySchemaReady: databaseReady,
           calendarConfigured: calendarConfigured(env)
         }, request);
       }
@@ -2708,4 +2714,73 @@ async function workspaceAction(request,env,session,action,p) {
     catch(error) { if(!p.id&&error.code==='GOOGLE_409') return googleRequest(env,owner,base+'/'+body.id); throw error; }
   }
   throw new AppError('지원하지 않는 업무 요청입니다.','INVALID');
+}
+
+async function exportClassArchive(env, request, session, payload) {
+  const row = await ownedClass(env, session, payload.classId);
+  const snapshot = await classData(env, row.id, '', Number(row.version || 1));
+  await ensureWorkspace(env);
+  const recordRow = await env.DB.prepare("SELECT value,revision FROM teacher_workspace WHERE teacher_id=? AND kind='records'").bind(session.user_id).first();
+  const records = recordRow ? JSON.parse(recordRow.value).filter(record => record.classId === row.id) : [];
+  const after = await ownedClass(env, session, row.id);
+  if (Number(after.version) !== Number(row.version)) throw new AppError('내보내는 동안 수업 자료가 변경되었습니다. 다시 시도해 주세요.', 'ARCHIVE_CHANGED', 409);
+  delete snapshot.classInfo.code;
+  snapshot.students = snapshot.students.map(({id,number,name}) => ({id,number,name}));
+  delete snapshot.timer;
+  const fileMap = new Map();
+  for (const group of ['announcements','assignments','boards','ideas','submissions','boardPosts']) {
+    for (const item of snapshot[group] || []) for (const file of item.attachments || []) fileMap.set(file.id, file);
+  }
+  if (fileMap.size > 2000) throw new AppError('첨부파일이 2,000개를 초과합니다. 활동별 다운로드를 이용해 주세요.', 'ARCHIVE_TOO_LARGE', 413);
+  // IDs come only from the authorized class snapshot, never from caller-provided file lists.
+  const files = [];
+  for (const file of fileMap.values()) files.push({...file,downloadUrl:payload.includeFiles ? await signedFileUrl(env, request, file, 'download') : ''});
+  return {format:'learn-class-archive',schemaVersion:1,exportedAt:nowIso(),classVersion:Number(row.version),recordsRevision:Number(recordRow?.revision || 0),snapshot,records,files};
+}
+
+let categorySchemaPromise;
+async function ensureCategorySchema(env) {
+  if(!categorySchemaPromise) categorySchemaPromise=env.DB.prepare('CREATE TABLE IF NOT EXISTS teacher_categories (teacher_id TEXT NOT NULL,scope TEXT NOT NULL,path TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(teacher_id,scope,path))').run().catch(e=>{categorySchemaPromise=null;throw e;});
+  await categorySchemaPromise;
+}
+async function categoryLabels(env,teacherId,scope) {
+  await ensureCategorySchema(env);
+  return all(env.DB.prepare('SELECT path,position FROM teacher_categories WHERE teacher_id=? AND scope=? ORDER BY position,path').bind(teacherId,scope));
+}
+async function manageCategory(env,session,p) {
+  const isResource=p.scope==='resources',scope=isResource?'resources':'class:'+String(p.classId||'');
+  if(isResource)await ensureTeacherResourceSchema(env);else await ownedClass(env,session,p.classId);
+  const labels=await categoryLabels(env,session.user_id,scope);
+  const table=isResource?'teacher_resources':'contents',key=isResource?'teacher_id':'class_id',owner=isResource?session.user_id:p.classId;
+  const used=(await all(env.DB.prepare(`SELECT DISTINCT category FROM ${table} WHERE ${key}=? AND category<>''`).bind(owner))).map(r=>r.category);
+  const paths=Array.from(new Set([...labels.map(x=>x.path),...used].flatMap(path=>path.split(' / ').map((_,i)=>path.split(' / ').slice(0,i+1).join(' / ')))));
+  const path=normalizeResourceCategory(p.path),target=normalizeResourceCategory(p.target);
+  if(!path || path==='미분류' || path==='all' || path.split(' / ').some(x=>!x.trim())||path.split(' / ').length>5)throw new AppError('분류 경로를 확인해 주세요. 최대 5단계, 전체 40자입니다.','INVALID_CATEGORY');
+  const affected=paths.filter(x=>x===path||x.startsWith(path+' / '));
+  const statements=[];
+  if(p.operation==='add') {
+    if(paths.length>=100)throw new AppError('분류는 최대 100개입니다.','CATEGORY_LIMIT');
+    statements.push(env.DB.prepare('INSERT OR IGNORE INTO teacher_categories VALUES(?,?,?,?)').bind(session.user_id,scope,path,labels.length));
+  }else if(p.operation==='rename') {
+    if(!affected.length)throw new AppError('분류를 찾을 수 없습니다.','NOT_FOUND',404);
+    if(!target||target==='미분류'||target==='all'||target===path||target.startsWith(path+' / '))throw new AppError('이동할 새 경로를 확인해 주세요. 자신의 하위로 이동할 수 없습니다.','INVALID_CATEGORY');
+    if(affected.length>100)throw new AppError('한 번에 변경할 수 있는 분류 수를 초과했습니다.','CATEGORY_LIMIT');
+    const mapped=affected.map(x=>target+x.slice(path.length));
+    if(mapped.some(x=>x.length>40||x.split(' / ').length>5||x.split(' / ').some(s=>!s.trim())))throw new AppError('변경 후 경로가 40자 또는 5단계를 초과합니다.','INVALID_CATEGORY');
+    if(mapped.some(x=>paths.includes(x)&&!affected.includes(x))&&!p.merge)throw new AppError('동일한 분류가 있습니다. 통합 옵션을 선택해 주세요.','CATEGORY_EXISTS',409);
+    statements.push(env.DB.prepare(`UPDATE ${table} SET category=? || substr(category,?) WHERE ${key}=? AND (category=? OR substr(category,1,?)=?)`).bind(target,path.length+1,owner,path,path.length+3,path+' / '));
+    for(const old of affected)statements.push(env.DB.prepare('DELETE FROM teacher_categories WHERE teacher_id=? AND scope=? AND path=?').bind(session.user_id,scope,old));
+    for(let i=0;i<affected.length;i++) {
+      statements.push(env.DB.prepare('INSERT OR IGNORE INTO teacher_categories VALUES(?,?,?,?)').bind(session.user_id,scope,mapped[i],labels.find(x=>x.path===affected[i])?.position||0));
+    }
+  }else if(p.operation==='delete') {
+    if(affected.length>100)throw new AppError('한 번에 변경할 분류 수를 초과했습니다.','CATEGORY_LIMIT');
+    for(const item of affected){statements.push(env.DB.prepare(`UPDATE ${table} SET category='' WHERE ${key}=? AND category=?`).bind(owner,item));statements.push(env.DB.prepare('DELETE FROM teacher_categories WHERE teacher_id=? AND scope=? AND path=?').bind(session.user_id,scope,item));}
+  }else if(p.operation==='order') {
+    if(!Array.isArray(p.order)||p.order.length>100||p.order.some(x=>!paths.includes(x)))throw new AppError('분류 순서를 확인해 주세요.','INVALID_CATEGORY');
+    p.order.forEach((x,i)=>statements.push(env.DB.prepare('INSERT INTO teacher_categories VALUES(?,?,?,?) ON CONFLICT(teacher_id,scope,path) DO UPDATE SET position=excluded.position').bind(session.user_id,scope,x,i)));
+  }else throw new AppError('분류 작업을 확인해 주세요.','INVALID');
+  if(statements.length)await env.DB.batch(statements);
+  if(!isResource)await touchClass(env,p.classId);
+  return {updated:true};
 }

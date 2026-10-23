@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFile} from 'node:fs/promises';
+const context=vm.createContext({window:{},crypto,TextEncoder,Uint8Array,btoa,atob,Blob,URL,setTimeout,fetch:async url=>url==='missing'?new Response('',{status:404}):new Response(new Uint8Array([1,2,3]))});
+vm.runInContext(await readFile(new URL('../public/archive.js',import.meta.url),'utf8'),context);
+const a=context.window.LearnArchive;
+const raw={format:'learn-class-archive',schemaVersion:1,exportedAt:'2026-10-24',classVersion:1,recordsRevision:0,snapshot:{classInfo:{name:'<script>evil</script>'},students:[],announcements:[{id:'x',title:'</script><script>alert(1)</script>',body:'원문'}],assignments:[],boards:[],ideas:[],submissions:[],boardPosts:[],ideaPosts:[]},records:[],files:[{id:'f',name:'파일.txt',size:3,downloadUrl:'signed-secret-url'},{id:'fail',name:'누락',size:2,downloadUrl:'missing'}]};
+const packed=await a.prepare(raw,true);assert.equal(packed.files[0].status,'included');assert.equal(packed.files[1].status,'failed');assert.equal((await a.verify(packed)).missing,1);
+const html=a.buildHtml(packed);assert.ok(!html.includes('signed-secret-url'));assert.ok(!html.includes('</script><script>alert(1)'));
+const match=html.match(/<script id="archive-data" type="application\/json">([\s\S]*?)<\/script>/);const restored=JSON.parse(match[1]);assert.equal(restored.snapshot.announcements[0].body,'원문');assert.equal((await a.verify(restored)).files,1);
+restored.snapshot.announcements[0].body='tampered';await assert.rejects(()=>a.verify(restored),/무결성/);
+const noFiles=await a.prepare(raw,false);assert.equal(noFiles.files[0].status,'omitted');assert.equal((await a.verify(noFiles)).files,0);
+await assert.rejects(()=>a.prepare({...raw,files:[{size:81*1024*1024}]},true),/80MB/);
+await assert.rejects(()=>a.prepare(raw,true,null,{aborted:true}),/취소/);
+console.log('PASS: archive round trip, SHA-256 tamper detection, attachment bytes, omitted/failed files, XSS escape, no signed URL embedding, size limit and cancellation.');
