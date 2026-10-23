@@ -1753,10 +1753,23 @@ video {
 }
 
 .selected-files {
-  display: grid;
-  gap: 7px;
   margin-top: 10px;
 }
+
+.selected-files-fold > summary {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 750;
+  list-style-position: inside;
+}
+
+.selected-files-fold[open] > summary { margin-bottom: 7px; }
+
+.selected-files-list { display: grid; gap: 7px; }
 
 .selected-file {
   display: flex;
@@ -3912,8 +3925,15 @@ body {
 .teacher-resource-links li { margin: 8px 0; }
 .teacher-resource-links a { color: var(--primary, #6756b5); overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: 3px; }
 .teacher-resource-more { display: flex; justify-content: center; margin-top: 24px; }
+.post-reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.reaction-button { min-height: 34px; padding: 0 9px; border-radius: 999px; }
+.reaction-button.active { border-color: rgba(207, 109, 127, 0.34); background: var(--rose-soft); color: #985364; }
+.field-inline { display: inline-flex; align-items: center; gap: 8px; }
+.field-inline select { min-height: 40px; max-width: 100%; }
 @media (max-width: 600px) {
   .site-header:has([data-teacher-resources-link]:not([hidden])) { flex-wrap: wrap; row-gap: 8px; padding-top: 10px; padding-bottom: 10px; }
   .teacher-resource-card { padding: 18px; }
   .teacher-resource-head { flex-direction: column; gap: 12px; }
+  .post-reactions { gap: 5px; }
+  .reaction-button { min-height: 36px; padding: 0 8px; }
 }

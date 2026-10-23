@@ -19,6 +19,7 @@
   var activeClassTab = 'announcements';
   var classSortStorageKey = 'learn_teacher_class_sort_v1';
   var teacherPostFilters = { type: 'all', category: 'all' };
+  var submissionSortByAssignment = {};
   var countdownTimer = null;
   var teacherIdeaModalState = null;
   var guestRoomData = null;
@@ -181,6 +182,7 @@
   var resourceLoadVersion = 0;
   var resourceCategories = [];
   var resourceCategoryFilter = null;
+  var resourceSearch = '';
   var resourceTeacherToken = '';
 
   async function renderResources(container, append) {
@@ -189,6 +191,7 @@
     if (resourceTeacherToken !== session.token) {
       resourceTeacherToken = session.token;
       resourceCategoryFilter = null;
+      resourceSearch = '';
       resourceCategories = [];
       append = false;
     }
@@ -198,7 +201,9 @@
     var moreButton = container.querySelector('[data-more-resources]');
     if (moreButton) UI.busy(moreButton, true, '불러오는 중…');
     try {
-      var data = await API.request('getTeacherResources', { cursor: append ? resourceCursor : null, category: resourceCategoryFilter }, 'teacher');
+      var data = await API.request('getTeacherResources', {
+        cursor: append ? resourceCursor : null, category: resourceCategoryFilter, search: resourceSearch
+      }, 'teacher');
       if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
       resourceItems = append ? resourceItems.concat(data.items) : data.items;
       resourceCursor = data.nextCursor;
@@ -231,7 +236,10 @@
           '<button class="button" type="button" data-add-resource>＋ 자료 추가</button></div></div>' +
       '<div class="panel teacher-resource-filter"><div class="field"><label for="resource-category-filter">카테고리별 보기</label>' +
         '<select id="resource-category-filter" data-resource-category-filter>' + resourceCategoryOptions() + '</select></div>' +
-        '<p class="muted-text">자료 추가·수정에서 카테고리 이름을 입력해 만들 수 있어요.</p></div>' +
+        '<form class="field" data-resource-search-form><label for="resource-search">자료 제목 앞부분 검색</label>' +
+          '<div class="inline-actions"><input id="resource-search" name="search" type="search" maxlength="80" value="' + UI.attr(resourceSearch) + '" placeholder="예: 우정, 수행평가">' +
+            '<button class="button secondary" type="submit">검색</button></div></form>' +
+        '<p class="muted-text">제목 앞부분 검색과 카테고리 필터를 함께 사용할 수 있어요. %, _ 기호는 검색어로 쓸 수 없어요.</p></div>' +
       (resourceItems.length ? '<div class="teacher-resource-list">' + resourceItems.map(function (item) {
         return '<article class="panel teacher-resource-card"><div class="teacher-resource-head"><h2>' + UI.escape(item.title) + '</h2>' +
           '<div class="teacher-resource-actions"><button class="button secondary small" type="button" data-edit-resource="' + UI.attr(item.id) + '">수정</button>' +
@@ -243,13 +251,19 @@
           }).join('') + '</ul>' : '') + UI.attachments(item.attachments, 'teacher', false, { heading: item.title, text: item.body, allowArchive: false }) + '</article>';
       }).join('') + '</div>' : '<div class="panel">' + (resourceCategoryFilter !== null
         ? UI.empty('이 카테고리에 자료가 없어요', '자료 추가에서 새 자료를 등록하거나 기존 자료의 카테고리를 바꿔 보세요.')
-        : UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.')) + '</div>') +
+        : (resourceSearch ? UI.empty('검색 결과가 없어요', '제목 앞부분을 짧게 바꾸거나 카테고리 필터를 확인해 보세요.')
+          : UI.empty('첫 자료를 모아 보세요', '자주 쓰는 링크, 학습지, 수업 자료를 한곳에 보관할 수 있어요.'))) + '</div>') +
       (resourceCursor ? '<div class="teacher-resource-more"><button class="button secondary" type="button" data-more-resources>자료 더 보기</button></div>' : '') + '</section>';
     container.querySelector('[data-add-resource]').addEventListener('click', function () { openResourceEditor(null, container); });
     container.querySelector('[data-refresh-resources]').addEventListener('click', function () { renderResources(container); });
     container.querySelector('[data-resource-category-filter]').addEventListener('change', function (event) {
       var value = event.currentTarget.value;
       resourceCategoryFilter = value === 'all' ? null : (value === 'uncategorized' ? '' : value.slice('category:'.length));
+      renderResources(container);
+    });
+    container.querySelector('[data-resource-search-form]').addEventListener('submit', function (event) {
+      event.preventDefault();
+      resourceSearch = String(new FormData(event.currentTarget).get('search') || '').trim();
       renderResources(container);
     });
     var more = container.querySelector('[data-more-resources]');
@@ -1213,6 +1227,7 @@
     }).join('');
     return '<div class="content-head"><div><h2>학생 관리</h2><p>학생은 초기 비밀번호로 계정을 만들고, 닉네임과 새 비밀번호를 사용해요.</p></div>' +
       '<div class="inline-actions">' +
+        (classData.students.length > 1 ? '<button class="button secondary" type="button" data-random-groups>조건부 랜덤 모둠</button>' : '') +
         (classData.students.length ? '<button class="button secondary" type="button" data-reissue-class-pins>전체 로그인표 새로 발급</button>' : '') +
         '<button class="button" type="button" data-add-students>＋ 학생 등록</button></div></div>' +
       (classData.students.length
@@ -1221,6 +1236,8 @@
   }
 
   function bindTabActions(container, classId, tab) {
+    var randomGroupsButton = container.querySelector('[data-random-groups]');
+    if (randomGroupsButton) randomGroupsButton.addEventListener('click', function () { openRandomGroupsEditor(); });
     var postTypeFilter = container.querySelector('[data-post-type-filter]');
     if (postTypeFilter) postTypeFilter.addEventListener('change', function () {
       teacherPostFilters.type = postTypeFilter.value;
@@ -1291,6 +1308,32 @@
       button.addEventListener('click', function () {
         deleteStudent(button.dataset.deleteStudent, button.dataset.studentLabel, classId, container, tab);
       });
+    });
+  }
+
+  function openRandomGroupsEditor() {
+    var dialog = UI.modal({
+      title: '조건부 랜덤 모둠 만들기',
+      wide: true,
+      html: '<form class="form-stack" data-random-groups-form>' +
+        '<div class="form-row"><div class="field"><label for="random-group-size">모둠당 인원</label><input id="random-group-size" name="size" type="number" min="2" max="12" value="4" required></div>' +
+        '<div class="field"><label for="random-group-separated">서로 다른 모둠에 배치할 출석번호</label><input id="random-group-separated" name="separated" placeholder="예: 3, 8, 14"><span class="field-help">입력한 학생은 서로 다른 모둠에 배정돼요.</span></div></div>' +
+        '<div class="modal-actions"><button class="button" type="submit">모둠 다시 섞기</button></div>' +
+        '<div data-random-group-results aria-live="polite"></div></form>'
+    });
+    dialog.querySelector('[data-random-groups-form]').addEventListener('submit', function (event) {
+      event.preventDefault();
+      var values = new FormData(event.currentTarget);
+      var separated = String(values.get('separated') || '').split(/[\s,，、]+/).filter(Boolean).map(Number);
+      try {
+        var groups = window.LearnGroups.create(classData.students, Number(values.get('size')), separated);
+        dialog.querySelector('[data-random-group-results]').innerHTML = '<div class="class-groups">' + groups.map(function (group) {
+          return '<section class="class-group"><div class="class-group-head"><h3>' + UI.escape(group.name) + '</h3><span>' + group.students.length + '명</span></div>' +
+            '<p>' + group.students.slice().sort(function (a, b) { return Number(a.number) - Number(b.number); }).map(function (student) {
+              return UI.escape(student.number + '번 ' + student.name);
+            }).join(' · ') + '</p></section>';
+        }).join('') + '</div>';
+      } catch (error) { UI.toast(error.message, 'error'); }
     });
   }
 
@@ -1700,21 +1743,40 @@
 
   function openSubmissions(assignmentId, classId, container, tab) {
     var assignment = classData.assignments.find(function (item) { return item.id === assignmentId; });
-    var submissions = classData.submissions.filter(function (item) { return item.assignmentId === assignmentId; })
-      .sort(function (a, b) { return Number(a.studentNumber) - Number(b.studentNumber); });
+    var sort = submissionSortByAssignment[assignmentId] || 'number';
+    var submissions = classData.submissions.filter(function (item) { return item.assignmentId === assignmentId; });
+    var byStudent = new Map(submissions.map(function (item) { return [item.studentId, item]; }));
+    var entries = (sort === 'missing' ? classData.students.map(function (student) {
+      return byStudent.has(student.id) ? byStudent.get(student.id) : { missing: true, student: student };
+    }) : submissions.slice());
+    entries.sort(function (left, right) {
+      if (Boolean(left.missing) !== Boolean(right.missing)) return left.missing ? -1 : 1;
+      var a = left.missing ? left.student : left;
+      var b = right.missing ? right.student : right;
+      if (sort === 'name') return String(a.studentName || a.name || '').localeCompare(String(b.studentName || b.name || ''), 'ko');
+      if (sort === 'recent') return String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')) || Number(a.studentNumber || a.number) - Number(b.studentNumber || b.number);
+      return Number(a.studentNumber || a.number) - Number(b.studentNumber || b.number);
+    });
     var submissionFiles = submissions.reduce(function (files, submission) {
       return files.concat(submission.attachments || []);
     }, []);
     var html =
       '<div class="content-head"><div><p style="margin:0">제출 ' + submissions.length + '/' + classData.students.length + '명</p></div>' +
-        '<div class="modal-actions" style="margin-top:0">' +
+        '<div class="modal-actions" style="margin-top:0"><label class="field-inline"><span>정렬</span><select data-submission-sort>' +
+          '<option value="number"' + (sort === 'number' ? ' selected' : '') + '>출석번호</option>' +
+          '<option value="name"' + (sort === 'name' ? ' selected' : '') + '>이름</option>' +
+          '<option value="recent"' + (sort === 'recent' ? ' selected' : '') + '>제출 시간 최신순</option>' +
+          '<option value="missing"' + (sort === 'missing' ? ' selected' : '') + '>미제출 먼저</option></select></label>' +
           '<button class="button secondary" type="button" data-archive-all ' + (!submissionFiles.length ? 'disabled' : '') + '>Drive로 일괄 보관</button>' +
           '<button class="button" type="button" data-download-all ' + (!submissionFiles.length ? 'disabled' : '') + '>ZIP 일괄 다운로드</button>' +
         '</div></div>';
-    if (!submissions.length) {
+    if (!submissions.length && sort !== 'missing') {
       html += UI.empty('아직 제출물이 없어요', '학생이 과제를 제출하면 이곳에 표시됩니다.');
     } else {
-      html += '<div class="item-list">' + submissions.map(function (submission) {
+      html += '<div class="item-list">' + entries.map(function (entry) {
+        if (entry.missing) return '<article class="item-card submission-summary-card"><div class="item-top"><div><h3>' +
+          UI.escape(entry.student.number + '번 ' + entry.student.name) + '</h3></div><span class="status-badge">미제출</span></div></article>';
+        var submission = entry;
         var context = {
           heading: submission.studentNumber + '번 ' + submission.studentName + ' 작성 내용',
           meta: assignment.title,
@@ -1733,6 +1795,11 @@
       }).join('') + '</div>';
     }
     var dialog = UI.modal({ title: assignment.title + ' 제출물', wide: true, html: html });
+    var sortSelect = dialog.querySelector('[data-submission-sort]');
+    if (sortSelect) sortSelect.addEventListener('change', function () {
+      submissionSortByAssignment[assignmentId] = sortSelect.value;
+      openSubmissions(assignmentId, classId, container, tab);
+    });
     UI.bindFiles(dialog, 'teacher');
     dialog.querySelectorAll('[data-teacher-submission]').forEach(function (card) {
       function openDetail(event) {

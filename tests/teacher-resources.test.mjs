@@ -161,6 +161,14 @@ const filtered2 = await call('getTeacherResources', { category: '같은 분류',
 assert.equal(filtered1.items.length, 50);
 assert.equal(filtered2.items.length, 6);
 assert.equal(new Set([...filtered1.items, ...filtered2.items].map((row) => row.id)).size, 56);
+const searchFiltered = await call('getTeacherResources', { category: '같은 분류', search: '자료' });
+assert.equal(searchFiltered.items.length, 50, 'search and category filters are combined on the server with pagination');
+assert.ok(searchFiltered.nextCursor);
+assert.ok(searchFiltered.items.every((row) => row.title.startsWith('자료') && row.category === '같은 분류'));
+const searchPlan = db.prepare('EXPLAIN QUERY PLAN SELECT * FROM teacher_resources INDEXED BY teacher_resources_teacher_title WHERE teacher_id=? AND title LIKE ? COLLATE NOCASE ORDER BY updated_at DESC,id DESC LIMIT 51').all('teacher-a', '자료%');
+assert.ok(searchPlan.some((row) => row.detail.includes('teacher_resources_teacher_title')),
+  'prefix title search uses the teacher/title index');
+await call('getTeacherResources', { search: '100%' }, a, 400);
 await call('upsertTeacherResource', { id: item.id, title: '미분류로 이동', category: '', keepAttachmentIds: [second.id] });
 assert.equal((await call('getTeacherResources', { category: '' })).items[0].id, item.id);
 await call('deleteTeacherResource', { id: item.id });

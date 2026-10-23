@@ -405,6 +405,7 @@
             '<div class="tile-content">' + UI.escape((post.text || '첨부파일을 올렸어요.').slice(0, 92)) +
             (post.text && post.text.length > 92 ? '…' : '') + '</div>' +
             UI.attachmentGallery(post.attachments, 'student', { compact: true, maxItems: 1, context: previewContext, allowDownload: mine }) +
+            boardPostReactions(post) +
             (mine && post.status === 'revision' ? '<div class="tile-review-state revision">수정이 필요해요</div>' : '') +
             (mine && post.status === 'confirmed' ? '<div class="tile-review-state confirmed">선생님 확인 완료</div>' : '')
           : mine && board.status === 'open'
@@ -425,6 +426,21 @@
       '<div class="board-sequence-head"><div><strong>출석번호 순서</strong><span>1번부터 차례대로 자기 카드에 올려요.</span></div>' +
         '<b>' + posts.length + '/' + orderedStudents.length + '명 작성</b></div>' +
       '<div class="board-grid ordered-board-grid">' + cards + '</div>';
+  }
+
+  function boardPostReactions(post) {
+    if (!post || (post.status !== 'published' && post.status !== 'confirmed')) return '';
+    var options = [
+      ['❤️', '고마워요'], ['👏', '잘했어요'], ['😊', '좋아요'], ['💡', '좋은 생각이에요'], ['👍', '응원해요']
+    ];
+    var counts = post.reactions || {};
+    return '<div class="post-reactions" role="group" aria-label="긍정 응원">' + options.map(function (item) {
+      var count = Number(counts[item[0]] || 0);
+      var selected = post.myReaction === item[0];
+      return '<button class="button ghost small reaction-button' + (selected ? ' active' : '') + '" type="button" data-react-post="' +
+        UI.attr(post.id) + '" data-react-emoji="' + UI.attr(item[0]) + '" aria-pressed="' + (selected ? 'true' : 'false') + '" aria-label="' +
+        UI.attr(item[1] + ' ' + count + '명') + '">' + item[0] + ' <span>' + count + '</span></button>';
+    }).join('') + '</div>';
   }
 
   function ideaGroupOrder(name) {
@@ -674,6 +690,21 @@
           event.preventDefault();
           activate(event);
         }
+      });
+    });
+    container.querySelectorAll('[data-react-post]').forEach(function (button) {
+      button.addEventListener('click', async function () {
+        var post = studentData.boardPosts.find(function (item) { return item.id === button.dataset.reactPost; });
+        if (!post) return;
+        UI.busy(button, true, '…');
+        try {
+          var result = await API.request('setBoardReaction', {
+            postId: post.id, emoji: button.dataset.reactEmoji
+          }, 'student');
+          post.reactions = result.reactions || {};
+          post.myReaction = result.myReaction || '';
+          paintClass(container, tab, session);
+        } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
       });
     });
   }

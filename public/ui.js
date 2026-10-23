@@ -266,7 +266,7 @@
       if (!list) return;
       var oldItems = (initialFiles || []).filter(function (file) { return keepIds.indexOf(file.id) >= 0; }).map(function (file) {
         return '<div class="selected-file"><div class="selected-file-info"><span class="selected-file-glyph">' + escapeHtml(fileGlyph(file)) + '</span>' +
-          '<span>기존 · ' + escapeHtml(file.name) + '</span></div>' +
+          '<span>기존 · ' + escapeHtml(file.name) + (file.size ? '<br><small>' + escapeHtml(fileSize(file.size)) + '</small>' : '') + '</span></div>' +
           '<button type="button" data-remove-old="' + attr(file.id) + '">제거</button></div>';
       });
       var newItems = selected.map(function (file, index) {
@@ -274,7 +274,13 @@
           '<span><strong>새 파일</strong><br>' + escapeHtml(file.name) + ' · ' + escapeHtml(fileSize(file.size)) + '</span></div>' +
           '<button type="button" data-remove-new="' + index + '">제거</button></div>';
       });
-      list.innerHTML = oldItems.concat(newItems).join('');
+      var allSelected = (initialFiles || []).filter(function (file) { return keepIds.indexOf(file.id) >= 0; }).concat(selected);
+      var totalBytes = allSelected.reduce(function (sum, file) { return sum + Number(file.size || 0); }, 0);
+      var fileCount = allSelected.length;
+      list.innerHTML = fileCount
+        ? '<details class="selected-files-fold"' + (fileCount <= 3 ? ' open' : '') + '><summary>첨부파일 ' + fileCount + '개 · 전체 ' + escapeHtml(fileSize(totalBytes) || '용량 정보 없음') + '</summary>' +
+          '<div class="selected-files-list">' + oldItems.concat(newItems).join('') + '</div></details>'
+        : '';
       list.querySelectorAll('[data-remove-old]').forEach(function (button) {
         button.addEventListener('click', function () {
           keepIds = keepIds.filter(function (id) { return id !== button.dataset.removeOld; });

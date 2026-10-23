@@ -32,7 +32,8 @@ const window = {
     calls.push({ action, payload, role });
     assert.equal(role, 'teacher');
     if (action === 'getTeacherResources') return {
-      items: items.filter((item) => payload.category == null || item.category === payload.category),
+      items: items.filter((item) => (payload.category == null || item.category === payload.category) &&
+        (!payload.search || item.title.toLocaleLowerCase().startsWith(payload.search.toLocaleLowerCase()))),
       categories: ['사회 1', 'uncategorized', '새 분류 <학습지>'], nextCursor: null
     };
     if (action === 'upsertTeacherResource') { items = [{ ...payload, id: 'saved', attachments: [] }]; return items[0]; }
@@ -83,11 +84,18 @@ await new Promise(setImmediate);
 assert.equal(calls.find((call) => call.action === 'upsertTeacherResource').payload.category, '새 카테고리');
 assert.equal(calls.at(-1).payload.category, '새 카테고리');
 assert.ok(container.innerHTML.includes('새 카테고리'));
+formValues = { search: '새' };
+await container.querySelector('[data-resource-search-form]').trigger('submit');
+await new Promise(setImmediate);
+assert.equal(calls.at(-1).payload.search, '새');
+assert.equal(calls.at(-1).payload.category, '새 카테고리', 'title search is combined with category selection');
+assert.ok(container.innerHTML.includes('value="새"'));
 // Changing accounts resets the previous account's filter and suggestions.
 teacherToken = 'teacher-b';
 await window.TeacherViews.resourcesPage(container);
 assert.equal(calls.at(-1).payload.category, null);
+assert.equal(calls.at(-1).payload.search, '');
 teacherToken = '';
 await window.TeacherViews.resourcesPage(container);
 assert.equal(location.hash, '#/teacher/login');
-console.log('PASS: escaped category options, all/named/unclassified filters, empty category, creation form, save and filter selection, account reset, login redirect, no polling.');
+console.log('PASS: category/search filters, empty category, creation form, save and filter selection, account reset, login redirect, no polling.');

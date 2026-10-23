@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v56';
+const RELEASE = '2026-10-23-v59';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -131,6 +131,16 @@ CREATE TABLE IF NOT EXISTS board_posts (
   FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS posts_class_board ON board_posts(class_id, board_id);
+CREATE TABLE IF NOT EXISTS board_post_reactions (
+  post_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(post_id,student_id),
+  FOREIGN KEY (post_id) REFERENCES board_posts(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS board_post_reactions_student ON board_post_reactions(student_id,post_id);
 CREATE TABLE IF NOT EXISTS idea_posts (
   id TEXT PRIMARY KEY,
   idea_id TEXT NOT NULL,
@@ -461,9 +471,9 @@ async function checkSchema(env) {
     if (!featureSchemaVerified) {
       try {
         const featureTables = await all(env.DB.prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts')"
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('idea_posts','class_timers','guest_rooms','guest_posts','board_post_reactions')"
         ));
-        if (featureTables.length < 4) await ensureSchema(env);
+        if (featureTables.length < 5) await ensureSchema(env);
         else {
           await ensureBoardPostTitleSchema(env);
           await ensureGuestBoardSchema(env);
@@ -743,6 +753,13 @@ async function classData(env, classId, studentId = '', knownVersion = null) {
       delete item.studentNumber;
       delete item.studentName;
     }
+    if (data.boardPosts.length) {
+      const selected = await all(env.DB.prepare(
+        `SELECT post_id,emoji FROM board_post_reactions WHERE student_id=? AND post_id IN (${placeholders(data.boardPosts.length)})`
+      ).bind(studentId, ...data.boardPosts.map((post) => post.id)));
+      const byPost = new Map(selected.map((row) => [row.post_id, row.emoji]));
+      for (const post of data.boardPosts) post.myReaction = byPost.get(post.id) || '';
+    }
   }
   return data;
 }
@@ -783,6 +800,14 @@ async function readClassSnapshot(env, classId, studentId = '') {
     }
     return item;
   });
+  if (posts.length) {
+    const reactionRows = await all(env.DB.prepare(
+      `SELECT post_id,emoji,COUNT(*) AS total FROM board_post_reactions WHERE post_id IN (${placeholders(posts.length)}) GROUP BY post_id,emoji`
+    ).bind(...posts.map((post) => post.id)));
+    const postById = new Map(posts.map((post) => [post.id, post]));
+    for (const post of posts) post.reactions = {};
+    for (const row of reactionRows) postById.get(row.post_id).reactions[row.emoji] = Number(row.total || 0);
+  }
   const ideaPosts = ideaPostRows.map((row) => ideaPostJson(row, !studentId, studentId));
   const submissionCounts = new Map();
   if (!studentId) {
@@ -936,6 +961,7 @@ async function ensureTeacherResourceSchema(env) {
         }
       }
       await env.DB.prepare('CREATE INDEX IF NOT EXISTS teacher_resources_teacher_category_updated ON teacher_resources(teacher_id,category,updated_at DESC,id DESC)').run();
+      await env.DB.prepare('CREATE INDEX IF NOT EXISTS teacher_resources_teacher_title ON teacher_resources(teacher_id,title COLLATE NOCASE)').run();
     })().catch((error) => { teacherResourceSchemaPromise = null; throw error; });
   }
   return teacherResourceSchemaPromise;
@@ -957,12 +983,26 @@ async function getTeacherResources(env, session, payload) {
   await ensureTeacherResourceSchema(env);
   const cursor = payload.cursor;
   const category = payload.category == null ? null : normalizeResourceCategory(payload.category);
+  const search = String(payload.search || '').trim().slice(0, 80);
+  if (search.includes('%') || search.includes('_') || search.includes('\\')) {
+    throw new AppError('검색어에서 %, _ 기호는 사용할 수 없습니다.', 'INVALID_SEARCH');
+  }
+  const conditions = ['teacher_id=?'];
+  const bindings = [session.user_id];
+  if (category !== null) { conditions.push('category=?'); bindings.push(category); }
+  if (search) {
+    conditions.push('title LIKE ? COLLATE NOCASE');
+    bindings.push(search + '%');
+  }
+  if (cursor) {
+    conditions.push('(updated_at<? OR (updated_at=? AND id<?))');
+    bindings.push(String(cursor.updatedAt || ''), String(cursor.updatedAt || ''), String(cursor.id || ''));
+  }
   const rows = await all(env.DB.prepare(
-    'SELECT * FROM teacher_resources WHERE teacher_id=?' +
-    (category !== null ? ' AND category=?' : '') +
-    (cursor ? ' AND (updated_at<? OR (updated_at=? AND id<?))' : '') +
+    'SELECT * FROM teacher_resources' + (search ? ' INDEXED BY teacher_resources_teacher_title' : '') +
+    ' WHERE ' + conditions.join(' AND ') +
     ' ORDER BY updated_at DESC,id DESC LIMIT 51'
-  ).bind(session.user_id, ...(category !== null ? [category] : []), ...(cursor ? [String(cursor.updatedAt || ''), String(cursor.updatedAt || ''), String(cursor.id || '')] : [])));
+  ).bind(...bindings));
   const page = rows.slice(0, 50);
   const items = page.map(teacherResourceJson);
   if (page.length) {
@@ -1801,6 +1841,37 @@ async function upsertBoardPost(env, session, payload) {
   return result;
 }
 
+async function setBoardReaction(env, session, payload) {
+  const emoji = String(payload.emoji || '');
+  const allowed = new Set(['❤️', '👏', '😊', '💡', '👍']);
+  if (!allowed.has(emoji)) throw new AppError('응원 이모지만 사용할 수 있어요.', 'INVALID_REACTION');
+  const postId = String(payload.postId || '');
+  const post = await env.DB.prepare('SELECT id,class_id,status FROM board_posts WHERE id=? AND class_id=?')
+    .bind(postId, session.class_id).first();
+  if (!post) throw new AppError('게시글을 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  if (post.status !== 'published' && post.status !== 'confirmed') {
+    throw new AppError('공개된 게시글에만 응원할 수 있어요.', 'POST_NOT_PUBLIC');
+  }
+  const existing = await env.DB.prepare('SELECT emoji FROM board_post_reactions WHERE post_id=? AND student_id=?')
+    .bind(post.id, session.user_id).first();
+  if (existing && existing.emoji === emoji) {
+    await env.DB.prepare('DELETE FROM board_post_reactions WHERE post_id=? AND student_id=?').bind(post.id, session.user_id).run();
+  } else {
+    await env.DB.prepare(
+      'INSERT INTO board_post_reactions(post_id,student_id,emoji,updated_at) VALUES(?,?,?,?) ON CONFLICT(post_id,student_id) DO UPDATE SET emoji=excluded.emoji,updated_at=excluded.updated_at'
+    ).bind(post.id, session.user_id, emoji, nowIso()).run();
+  }
+  const rows = await all(env.DB.prepare(
+    'SELECT emoji,COUNT(*) AS total FROM board_post_reactions WHERE post_id=? GROUP BY emoji'
+  ).bind(post.id));
+  const reactions = {};
+  for (const row of rows) reactions[row.emoji] = Number(row.total || 0);
+  const mine = await env.DB.prepare('SELECT emoji FROM board_post_reactions WHERE post_id=? AND student_id=?')
+    .bind(post.id, session.user_id).first();
+  await touchClass(env, post.class_id);
+  return { postId: post.id, reactions, myReaction: mine ? mine.emoji : '' };
+}
+
 async function deleteBoardPost(env, session, payload) {
   const row = await env.DB.prepare('SELECT * FROM board_posts WHERE id=?').bind(String(payload.postId || '')).first();
   if (!row) return { deleted: true };
@@ -2240,7 +2311,7 @@ async function handleAction(request, env) {
     'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'reopenGuestRoom', 'deleteGuestRoom',
     'createGuestBoard', 'updateGuestBoard', 'deleteGuestBoard'
   ]);
-  const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'upsertIdeaPost']);
+  const studentActions = new Set(['getStudentClass', 'upsertSubmission', 'deleteSubmission', 'upsertBoardPost', 'setBoardReaction', 'upsertIdeaPost']);
   const guestActions = new Set(['getGuestRoom', 'guestHeartbeat']);
   let role = '';
   if (teacherActions.has(action)) role = 'teacher';
@@ -2274,6 +2345,7 @@ async function handleAction(request, env) {
     case 'upsertSubmission': return upsertSubmission(env, session, payload);
     case 'deleteSubmission': return deleteSubmission(env, session, payload);
     case 'upsertBoardPost': return upsertBoardPost(env, session, payload);
+    case 'setBoardReaction': return setBoardReaction(env, session, payload);
     case 'deleteBoardPost': return deleteBoardPost(env, session, payload);
     case 'upsertIdeaPost': return upsertIdeaPost(env, session, payload);
     case 'deleteIdeaPost': return deleteIdeaPost(env, session, payload);

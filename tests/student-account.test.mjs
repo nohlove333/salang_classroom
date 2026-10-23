@@ -11,7 +11,14 @@ const worker = module.default;
 const db = new DatabaseSync(':memory:');
 const sqlLog = [];
 db.exec('PRAGMA foreign_keys=ON');
-db.exec(module.SCHEMA);
+// Start from the pre-v58 schema so the first API request exercises the additive
+// production migration instead of silently relying on a freshly initialized DB.
+const legacySchema = module.SCHEMA.replace(
+  /CREATE TABLE IF NOT EXISTS board_post_reactions \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS board_post_reactions_student ON board_post_reactions\(student_id,post_id\);\n/,
+  ''
+);
+assert.notEqual(legacySchema, module.SCHEMA, 'legacy fixture omits the newly introduced reaction table');
+db.exec(legacySchema);
 
 const now = new Date().toISOString();
 const expiry = new Date(Date.now() + 86400000).toISOString();
@@ -68,6 +75,8 @@ const login = (overrides = {}) => request('studentLogin', {
 
 const unclaimed = await request('studentLogin', { classCode: 'LOVE01', number: 7, nickname: '새별', password: 'student-pass-2030' });
 assert.equal(unclaimed.status, 409, 'legacy accounts require their one-time PIN before setup');
+assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='board_post_reactions'").get(),
+  'a pre-v58 database receives the additive reaction schema before class data is read');
 sqlLog.length = 0;
 const first = await login({ initialPin: '4321' });
 assert.equal(first.status, 200, JSON.stringify(first.body));
@@ -103,9 +112,33 @@ const reissued = await request('reissueClassPins', { classId: 'class-a' }, rawTe
 assert.equal(reissued.status, 200, JSON.stringify(reissued.body));
 assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
   'bulk reset reuses the class version and avoids an extra D1 SELECT');
+const reactionLogin = await login({ initialPin: reissued.body.data.students[0].pin, nickname: '별하나' });
+assert.equal(reactionLogin.status, 200, JSON.stringify(reactionLogin.body));
+const reactionToken = reactionLogin.body.data.token;
+
+db.prepare("INSERT INTO contents(id,class_id,type,title,body,category,pinned,due_at,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+  .run('board-a', 'class-a', 'board', '응원 보드', '', '', 0, '', 'open', now, now);
+db.prepare("INSERT INTO board_posts(id,board_id,class_id,student_id,student_number,student_name,title,text,status,revision_message,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+  .run('post-a', 'board-a', 'class-a', 'student-a', 7, '별하나', '좋은 생각', '함께 해보자', 'published', '', now, now);
+const firstReaction = await request('setBoardReaction', { postId: 'post-a', emoji: '❤️' }, reactionToken);
+assert.equal(firstReaction.status, 200, JSON.stringify(firstReaction.body));
+assert.deepEqual(firstReaction.body.data.reactions, { '❤️': 1 });
+const changedReaction = await request('setBoardReaction', { postId: 'post-a', emoji: '👍' }, reactionToken);
+assert.deepEqual(changedReaction.body.data.reactions, { '👍': 1 }, 'one student can keep only one reaction per post');
+const classWithReaction = await request('getStudentClass', {}, reactionToken);
+const ownPost = classWithReaction.body.data.boardPosts.find((post) => post.id === 'post-a');
+assert.equal(ownPost.myReaction, '👍', 'student reload restores their selected reaction');
+assert.deepEqual(ownPost.reactions, { '👍': 1 });
+const removedReaction = await request('setBoardReaction', { postId: 'post-a', emoji: '👍' }, reactionToken);
+assert.equal(removedReaction.body.data.myReaction, '', 'selecting the active reaction toggles it off');
+assert.equal(Object.keys(removedReaction.body.data.reactions).length, 0);
+const inappropriateReaction = await request('setBoardReaction', { postId: 'post-a', emoji: '😡' }, reactionToken);
+assert.equal(inappropriateReaction.status, 400, 'negative emoji are rejected');
+const teacherReaction = await request('setBoardReaction', { postId: 'post-a', emoji: '❤️' }, rawTeacherToken);
+assert.equal(teacherReaction.status, 401, 'teachers cannot impersonate student reactions');
 
 const qr = await worker.fetch(new Request('https://local.test/student-login-qr.svg?code=LOVE01'), env);
 assert.equal(qr.status, 200);
 assert.equal(qrValues.at(-1), 'https://local.test/?classCode=LOVE01&#/student/login');
 
-console.log('PASS: legacy PIN claim, password hashing, nickname changes, teacher reset, data linkage, and class-coded QR.');
+console.log('PASS: student account migration, password hashing, nickname reset, class-coded QR, and positive-only post reactions.');
