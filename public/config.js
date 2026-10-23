@@ -3,7 +3,7 @@ window.LEARN_CONFIG = {
   provider: "cloudflare",
   directUpload: true,
   demoMode: false,
-  syncSeconds: 20,
+  syncSeconds: 60,
   guestSyncSeconds: 20,
   presenceSeconds: 90,
   maxFileSizeMb: 25,

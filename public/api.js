@@ -5,6 +5,7 @@
   var teacherSessionKey = 'learn_teacher_session_v1';
   var studentSessionKey = 'learn_student_session_v1';
   var guestSessionKey = 'learn_guest_session_v1';
+  var classCachePrefix = 'learn_class_cache_v1_';
   var requestBlockedUntil = 0;
 
   // Background work is paused while the page is hidden/offline. Failed checks
@@ -99,12 +100,29 @@
     }
   }
 
+  function clearRoleClassCache(role) {
+    try {
+      var prefix = classCachePrefix + role + '_';
+      var keys = [];
+      for (var index = 0; index < localStorage.length; index += 1) {
+        var key = localStorage.key(index);
+        if (key && key.indexOf(prefix) === 0) keys.push(key);
+      }
+      keys.forEach(function (key) { localStorage.removeItem(key); });
+    } catch (error) {}
+  }
+
   function writeSession(role, value) {
     var key = sessionKey(role);
     if (!value) {
+      clearRoleClassCache(role);
       localStorage.removeItem(key);
       return;
     }
+    var previous = readSession(role);
+    var previousId = previous && previous.user && previous.user.id;
+    var nextId = value && value.user && value.user.id;
+    if (previousId && nextId && String(previousId) !== String(nextId)) clearRoleClassCache(role);
     localStorage.setItem(key, JSON.stringify(value));
   }
 
@@ -336,6 +354,97 @@
       if (error instanceof ApiError) throw error;
       throw new ApiError('인터넷 연결을 확인한 뒤 다시 시도해 주세요.', 'NETWORK_ERROR');
     }
+  };
+
+  AppAPI.prototype.getClassCache = function (role, ownerId, classId) {
+    if (!ownerId || !classId) return null;
+    var key = classCachePrefix + role + '_' + encodeURIComponent(ownerId) + '_' + encodeURIComponent(classId);
+    try {
+      var cached = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!cached || Date.now() - Number(cached.savedAt || 0) > 7 * 24 * 60 * 60 * 1000 ||
+          !cached.data || String(cached.data.classInfo && cached.data.classInfo.id) !== String(classId)) {
+        localStorage.removeItem(key);
+        return null;
+      }
+      return cached.data;
+    } catch (error) { return null; }
+  };
+
+  AppAPI.prototype.setClassCache = function (role, ownerId, classId, data) {
+    if (!ownerId || !classId || !data || !data.classInfo || String(data.classInfo.id) !== String(classId)) return;
+    var key = classCachePrefix + role + '_' + encodeURIComponent(ownerId) + '_' + encodeURIComponent(classId);
+    try { localStorage.setItem(key, JSON.stringify({ savedAt: Date.now(), data: data })); } catch (error) {}
+  };
+
+  AppAPI.prototype.connectClassSync = function (role, classId, onChange) {
+    var active = true;
+    var socket = null;
+    var retryTimer = null;
+    var retryDelay = 1000;
+    function visible() { return document.visibilityState !== 'hidden' && navigator.onLine !== false; }
+    function notifyChange() {
+      if (typeof onChange !== 'function') return;
+      try { Promise.resolve(onChange()).catch(function () {}); } catch (error) {}
+    }
+    function clearRetry() { if (retryTimer) window.clearTimeout(retryTimer); retryTimer = null; }
+    function closeSocket() {
+      if (!socket) return;
+      var current = socket;
+      socket = null;
+      try { current.close(); } catch (error) {}
+    }
+    function scheduleReconnect() {
+      clearRetry();
+      if (!active || !visible()) return;
+      retryTimer = window.setTimeout(connect, retryDelay + Math.random() * Math.min(1000, retryDelay / 2));
+      retryDelay = Math.min(30000, retryDelay * 2);
+    }
+    function connect() {
+      clearRetry();
+      if (!active || !visible() || socket || config.demoMode) return;
+      var session = readSession(role);
+      if (!session || !session.token) return;
+      try {
+        var endpoint = new URL(String(config.apiUrl || '/api').replace(/\/$/, '') + '/sync', location.href);
+        endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+        if (role === 'teacher') endpoint.searchParams.set('classId', String(classId));
+        var current = new WebSocket(endpoint.toString(), ['learn-sync', String(session.token)]);
+        socket = current;
+        current.onopen = function () {
+          if (socket !== current) return;
+          retryDelay = 1000;
+          notifyChange();
+        };
+        current.onmessage = function (event) {
+          if (socket !== current || typeof onChange !== 'function') return;
+          try {
+            var message = JSON.parse(event.data || '{}');
+            if (message.type === 'class-changed') notifyChange();
+          } catch (error) {}
+        };
+        current.onerror = function () { try { current.close(); } catch (error) {} };
+        current.onclose = function () {
+          if (socket === current) socket = null;
+          scheduleReconnect();
+        };
+      } catch (error) { scheduleReconnect(); }
+    }
+    function resume() { if (!visible()) { closeSocket(); clearRetry(); return; } connect(); }
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('online', resume);
+    window.addEventListener('offline', resume);
+    connect();
+    return {
+      stop: function () {
+        active = false;
+        clearRetry();
+        closeSocket();
+        document.removeEventListener('visibilitychange', resume);
+        window.removeEventListener('online', resume);
+        window.removeEventListener('offline', resume);
+      },
+      isOpen: function () { return Boolean(socket && socket.readyState === WebSocket.OPEN); }
+    };
   };
 
   var demoStorageKey = 'learn_demo_database_v2';

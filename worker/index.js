@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v50';
+const RELEASE = '2026-10-23-v51';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -771,8 +771,39 @@ async function readClassSnapshot(env, classId, studentId = '') {
 }
 
 async function touchClass(env, classId) {
-  classSnapshots.delete(classId);
   await env.DB.prepare('UPDATE classes SET version=version+1, updated_at=? WHERE id=?').bind(nowIso(), classId).run();
+  await notifyClassSync(env, classId);
+}
+
+async function notifyClassSync(env, classId) {
+  if (!classId) return;
+  classSnapshots.delete(String(classId));
+  if (!env.CLASS_SYNC) return;
+  try {
+    const stub = env.CLASS_SYNC.get(env.CLASS_SYNC.idFromName(String(classId)));
+    await stub.fetch('https://class-sync/notify', { method: 'POST' });
+  } catch (error) {
+    console.error('Class sync notification failed:', String(error && error.message || error));
+  }
+}
+
+async function classSyncSocket(request, env) {
+  if (String(request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
+    throw new AppError('실시간 동기화 연결이 필요합니다.', 'WEBSOCKET_REQUIRED', 426);
+  }
+  const protocols = String(request.headers.get('Sec-WebSocket-Protocol') || '')
+    .split(',').map((item) => item.trim()).filter(Boolean);
+  const token = protocols.find((item) => item !== 'learn-sync');
+  if (!protocols.includes('learn-sync') || !token) throw new AppError('로그인이 필요합니다.', 'UNAUTHORIZED', 401);
+  const session = await sessionFromToken(env, token);
+  let classId = '';
+  if (session.role === 'student') classId = session.class_id;
+  else if (session.role === 'teacher') {
+    classId = String(new URL(request.url).searchParams.get('classId') || '');
+    await ownedClass(env, session, classId);
+  } else throw new AppError('실시간 동기화 권한이 없습니다.', 'FORBIDDEN', 403);
+  const stub = env.CLASS_SYNC.get(env.CLASS_SYNC.idFromName(String(classId)));
+  return stub.fetch(request);
 }
 
 function placeholders(count) {
@@ -1374,6 +1405,7 @@ async function updateClass(env, session, payload) {
   await env.DB.prepare(
     'UPDATE classes SET name=?,subject=?,school=?,version=version+1,updated_at=? WHERE id=? AND teacher_id=?'
   ).bind(name, subject, school, nowIso(), row.id, session.user_id).run();
+  await notifyClassSync(env, row.id);
   return classJson(await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(row.id).first());
 }
 
@@ -1413,6 +1445,7 @@ async function deleteClass(env, session, payload) {
     env.DB.prepare('DELETE FROM students WHERE class_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM classes WHERE id=?').bind(row.id)
   ]);
+  await notifyClassSync(env, row.id);
   return { deleted: true };
 }
 
@@ -1498,6 +1531,7 @@ async function addStudents(env, session, payload) {
     env.DB.prepare('UPDATE classes SET student_count=(SELECT COUNT(*) FROM students WHERE class_id=?),version=version+1,updated_at=? WHERE id=?')
       .bind(classRow.id, nowIso(), classRow.id)
   ]);
+  await notifyClassSync(env, classRow.id);
   return { students: created.map((row) => studentJson(row, true)) };
 }
 
@@ -1517,6 +1551,7 @@ async function reissueClassPins(env, session, payload) {
   statements.push(env.DB.prepare("DELETE FROM sessions WHERE role='student' AND class_id=?").bind(classRow.id));
   statements.push(env.DB.prepare('UPDATE classes SET version=version+1,updated_at=? WHERE id=?').bind(nowIso(), classRow.id));
   await env.DB.batch(statements);
+  await notifyClassSync(env, classRow.id);
   return { students: output };
 }
 
@@ -1531,6 +1566,7 @@ async function resetStudentPin(env, session, payload) {
     env.DB.prepare('UPDATE students SET pin_hash=?,pin_salt=? WHERE id=?').bind(await pinHash(pin, salt, env), salt, row.id),
     env.DB.prepare("DELETE FROM sessions WHERE role='student' AND user_id=?").bind(row.id)
   ]);
+  await notifyClassSync(env, row.class_id);
   return { studentId: row.id, pin };
 }
 
@@ -1554,6 +1590,7 @@ async function deleteStudent(env, session, payload) {
     env.DB.prepare('UPDATE classes SET student_count=(SELECT COUNT(*) FROM students WHERE class_id=?),version=version+1,updated_at=? WHERE id=?')
       .bind(row.class_id, nowIso(), row.class_id)
   ]);
+  await notifyClassSync(env, row.class_id);
   return { deleted: true };
 }
 
@@ -2252,6 +2289,7 @@ export default {
           release: RELEASE
         }, request);
       }
+      if (url.pathname === '/api/sync' && request.method === 'GET') return await classSyncSocket(request, env);
       if (url.pathname === '/api/upload' && request.method === 'POST') {
         return ok(await handleUpload(request, env), request);
       }
@@ -2269,5 +2307,32 @@ export default {
     }
   }
 };
+
+export class ClassSyncHub {
+  constructor(ctx) { this.ctx = ctx; }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/notify' && request.method === 'POST') {
+      const message = JSON.stringify({ type: 'class-changed' });
+      let sent = 0;
+      for (const socket of this.ctx.getWebSockets()) {
+        try { socket.send(message); sent += 1; }
+        catch (_) { try { socket.close(1011, 'sync notification failed'); } catch (_) {} }
+      }
+      return Response.json({ sent });
+    }
+    if (!['/api/sync', '/connect'].includes(url.pathname) || request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('Not found', { status: 404 });
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    return new Response(null, {
+      status: 101,
+      webSocket: pair[0],
+      headers: { 'Sec-WebSocket-Protocol': 'learn-sync' }
+    });
+  }
+}
 
 

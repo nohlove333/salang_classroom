@@ -19,6 +19,14 @@
       "binding": "FILES"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CLASS_SYNC", "class_name": "ClassSyncHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ClassSyncHub"] }
+  ],
   "observability": {
     "enabled": true
   }
