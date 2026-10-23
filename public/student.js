@@ -153,6 +153,7 @@
         timerBanner(studentData.timer) +
         '<nav class="tab-bar" aria-label="우리 반 메뉴">' +
           studentTab('posts', '글 목록', studentData.announcements.length + studentData.assignments.length + studentData.boards.length + ideas.length, tab) +
+          studentTab('progress', '진행 상황', studentData.assignments.length, tab) +
           studentTab('announcements', '공지', studentData.announcements.length, tab) +
           studentTab('assignments', '과제', studentData.assignments.length, tab) +
           studentTab('boards', '보드', studentData.boards.length, tab) +
@@ -224,10 +225,33 @@
 
   function renderTab(tab, session) {
     if (tab === 'posts') return renderStudentPostIndex(session);
+    if (tab === 'progress') return renderStudentProgress(session);
     if (tab === 'assignments') return renderAssignments(session);
     if (tab === 'boards') return renderBoards(session);
     if (tab === 'ideas') return renderIdeas(session);
     return renderAnnouncements();
+  }
+
+  function renderStudentProgress(session) {
+    var progress = window.LearnProgress.forStudent(studentData.assignments, studentData.submissions, session.user.id);
+    if (!progress.total) return '<div class="content-head"><div><h2>나의 수업 진행</h2><p>과제가 등록되면 제출 여부를 여기서 확인할 수 있어요.</p></div></div>' +
+      UI.empty('아직 등록된 과제가 없어요', '선생님이 과제를 올리면 진행 상황에 표시됩니다.');
+    var entries = progress.entries.map(function (entry) {
+      var assignment = entry.assignment;
+      var submission = (studentData.submissions || []).find(function (item) { return item.assignmentId === assignment.id; });
+      return '<article class="item-card progress-assignment"><div class="item-top"><div><h3>' + UI.escape(assignment.title) + '</h3>' +
+        '<div class="meta-line">' + categoryBadge(assignment) + (assignment.dueAt ? '<span>마감 ' + UI.escape(UI.date(assignment.dueAt, true)) + '</span>' : '') +
+        '</div></div><span class="status-badge ' + (entry.submitted ? 'submitted' : (assignment.status === 'open' ? 'open' : '')) + '">' +
+        (entry.submitted ? '제출 완료' : (assignment.status === 'open' ? '제출 대기' : '마감 · 미제출')) + '</span></div>' +
+        (submission ? '<small>최근 제출 ' + UI.escape(UI.date(submission.updatedAt || submission.submittedAt, true)) + '</small>' : '') +
+        (!entry.submitted && assignment.status === 'open' ? '<button class="button small" type="button" data-progress-submit="' + UI.attr(assignment.id) + '">과제 열기</button>' : '') +
+        '</article>';
+    }).join('');
+    return '<div class="content-head"><div><h2>나의 수업 진행</h2><p>과제 제출 상태와 마감 일정을 한곳에서 확인해요.</p></div></div>' +
+      '<section class="progress-summary" aria-label="과제 진행 요약"><strong>' + progress.submitted + ' / ' + progress.total + '개 제출</strong>' +
+      '<div class="storage-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress.percent + '"><span style="width:' + progress.percent + '%"></span></div>' +
+      '<small>제출 대기 ' + progress.pending + '개 · 전체 진행률 ' + progress.percent + '%</small></section>' +
+      '<div class="item-list">' + entries + '</div>';
   }
 
   function contentCategory(item) {
@@ -645,6 +669,13 @@
         var assignment = studentData.assignments.find(function (item) { return item.id === button.dataset.submitAssignment; });
         var submission = studentData.submissions.find(function (item) { return item.assignmentId === assignment.id; });
         openSubmissionEditor(assignment, submission, container, tab);
+      });
+    });
+    container.querySelectorAll('[data-progress-submit]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var assignment = studentData.assignments.find(function (item) { return item.id === button.dataset.progressSubmit; });
+        if (!assignment || assignment.status !== 'open') return;
+        openSubmissionEditor(assignment, null, container, tab);
       });
     });
     container.querySelectorAll('[data-view-own-submission]').forEach(function (box) {

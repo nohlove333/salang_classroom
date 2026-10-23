@@ -1771,6 +1771,23 @@ video {
 
 .selected-files-list { display: grid; gap: 7px; }
 
+.class-progress-fold,
+.progress-summary {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.class-progress-fold > summary { cursor: pointer; font-weight: 800; }
+.class-progress-fold .table-wrap { margin-top: 12px; }
+.progress-summary { display: grid; gap: 8px; }
+.progress-summary > strong { font-size: 1.1rem; }
+.progress-meter { display: inline-block; width: 90px; height: 8px; margin-right: 7px; overflow: hidden; border-radius: 999px; background: var(--blue-soft); vertical-align: middle; }
+.progress-meter span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.progress-assignment > .button { margin-top: 10px; }
+
 .selected-file {
   display: flex;
   align-items: center;

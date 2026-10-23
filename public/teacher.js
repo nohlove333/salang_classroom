@@ -1216,6 +1216,7 @@
   }
 
   function renderStudents() {
+    var progress = window.LearnProgress.forClass(classData.assignments, classData.submissions, classData.students);
     var rows = classData.students.map(function (student) {
       return '<tr><td><strong>' + UI.escape(student.number) + '</strong></td><td>' + UI.escape(student.name) + '</td>' +
         '<td><span class="status-pill ' + (student.accountReady ? 'open' : 'closed') + '">' +
@@ -1225,6 +1226,10 @@
           '<button class="text-link" type="button" data-delete-student="' + UI.attr(student.id) +
           '" data-student-label="' + UI.attr(student.number + '번 ' + student.name) + '">삭제</button></div></td></tr>';
     }).join('');
+    var progressRows = progress.students.map(function (row) {
+      return '<tr><td>' + UI.escape(row.student.number) + '번 ' + UI.escape(row.student.name) + '</td><td>' +
+        row.submitted + ' / ' + row.total + '</td><td>' + row.pending + '개 미제출</td><td><div class="progress-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + row.percent + '"><span style="width:' + row.percent + '%"></span></div>' + row.percent + '%</td></tr>';
+    }).join('');
     return '<div class="content-head"><div><h2>학생 관리</h2><p>학생은 초기 비밀번호로 계정을 만들고, 닉네임과 새 비밀번호를 사용해요.</p></div>' +
       '<div class="inline-actions">' +
         (classData.students.length > 1 ? '<button class="button secondary" type="button" data-random-groups>조건부 랜덤 모둠</button>' : '') +
@@ -1232,7 +1237,11 @@
         '<button class="button" type="button" data-add-students>＋ 학생 등록</button></div></div>' +
       (classData.students.length
         ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>출석번호</th><th>닉네임/명단</th><th>계정 상태</th><th>관리</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
-        : UI.empty('등록된 학생이 없어요', '한 반 30명을 한 번에 등록할 수 있어요.', '<button class="button secondary" type="button" data-add-students>학생 등록</button>'));
+        : UI.empty('등록된 학생이 없어요', '한 반 30명을 한 번에 등록할 수 있어요.', '<button class="button secondary" type="button" data-add-students>학생 등록</button>')) +
+      (classData.students.length && classData.assignments.length
+        ? '<details class="class-progress-fold"><summary>학생별 과제 진행 상황 · ' + progress.submitted + ' / ' + (progress.submitted + progress.pending) + '건 제출</summary>' +
+          '<div class="table-wrap"><table class="data-table"><thead><tr><th>학생</th><th>제출</th><th>남은 과제</th><th>진행률</th></tr></thead><tbody>' + progressRows + '</tbody></table></div></details>'
+        : '');
   }
 
   function bindTabActions(container, classId, tab) {
