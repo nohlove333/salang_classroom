@@ -76,3 +76,7 @@
 - tests/workspace.test.mjs, workspace-ui.test.mjs 및 package.json: 격리 DB/API·뷰 컨트롤러 검증 추가.
 - CALENDAR_SETUP.md 및 .dev.vars.example: 필요한 운영 설정과 실제 검증 절차. 실비밀값 없음.
 - 기존 테스트 전부 및 새 테스트 통과. 실제 브라우저 설치가 실패하여 시각 검증은 미완료. Google 실계정 시험 미완료.
+
+## 2026-10-24 v64
+
+v63 배포 후 최종 검토에서 발견한 계정 전환 중 비동기 응답 경쟁을 차단한다. workspaceGet은 현재 세션과 렌더 세대가 동일할 때만 상태를 대입하고, Calendar 목록/페이지는 응답 후 현재 인증을 다시 비교한 뒤 캐시를 갱신한다. API/뷰 컨트롤러 시험 및 JS 구문 검사 통과. v63 배포 증거는 PROJECT_STATE.md에 보존.

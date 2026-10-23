@@ -46,3 +46,11 @@ GitHub checks에서 기존 Workers Builds 성공과 Version ID 9adc6eb7-3a5f-402
 - Google 실제 연결·실제 양방향 CRUD는 미검증. 운영 secrets 유무는 신규 health calendarConfigured로 확인해야 한다.
 - 기존 8종 및 신규 API/뷰 컨트롤러 테스트 통과. 실제 브라우저 설치 파일 다운로드 실패로 픽셀·모바일 시각 검증은 미완료. UI 테스트는 DOM stub이며 실제 브라우저 시험 아님.
 - 전체 요청 완료 아님. CALENDAR_SETUP.md 및 NEXT_TASKS.md에 범위와 제한 기록.
+
+## 배포 후 확인 및 v64 보강
+
+- v63 운영 health: release=2026-10-24-v63, databaseReady/featureSchemaReady/workspaceSchemaReady=true, calendarConfigured=false.
+- v63 GitHub 662fd34c373a3b52060567618b100a98911a25b5, Workers Build 67768f21-340f-44f6-9fd5-8b26aeb43f94 성공. Worker Version ID 5165fb38-189e-404d-bcd2-131b4a38ba3d. 이는 version ID이며 별도 deployment UUID는 아님.
+- 실제 브라우저에서 교사 라우트의 로그인 화면 도착 확인. 로그인 세션이 없어 교사 개인 화면의 실제 조작은 진행하지 않았다.
+- v64: 계정 전환 시 늦게 도착한 workspace/Calendar 응답을 세션 토큰·렌더 세대로 검사해 폐기. 기존 계정의 응답이 새 계정의 화면/캐시에 적용되지 않도록 보강. 관련 API/컨트롤러 시험 재통과.
+- v64 빌드·health의 최종 값은 작업 완료 응답에서 보고한다. 전체 미완 항목은 NEXT_TASKS.md 참조.
