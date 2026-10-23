@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "node --check worker/index.js"
+    "check": "node --check worker/index.js",
+    "test": "node tests/class-sync.test.mjs && node tests/teacher-resources.test.mjs && node tests/teacher-resources-ui.test.mjs && node tests/read-optimization.test.mjs"
   },
   "dependencies": {
     "qrcode-generator": "1.4.4"

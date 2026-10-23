@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v51';
+const RELEASE = '2026-10-23-v52';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -10,6 +10,12 @@ const initializedGuestRooms = new Set();
 // Only raw, server-side snapshots are shared. Every response is copied and
 // filtered for the authenticated student before it leaves this Worker.
 const classSnapshots = new Map();
+// The storage meter is a dashboard hint. Share one short-lived aggregate
+// across requests handled by this isolate and refresh it after file rows move.
+let fileStorageStatusCache = null;
+let fileStorageStatusCacheAt = 0;
+let fileStorageStatusPromise = null;
+let fileStorageStatusGeneration = 0;
 
 const TEACHER_RESOURCE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS teacher_resources (
@@ -828,6 +834,7 @@ async function deleteOwnerFiles(env, ownerType, ownerIds) {
       env.DB.prepare(`DELETE FROM attachments WHERE file_id IN (${placeholders(fileIds.length)})`).bind(...fileIds),
       env.DB.prepare(`DELETE FROM files WHERE id IN (${placeholders(fileIds.length)})`).bind(...fileIds)
     ]);
+    invalidateFileStorageStatus();
   }
 }
 
@@ -844,6 +851,7 @@ async function replaceAttachments(env, ownerType, ownerId, keepIds, uploadedFile
       env.DB.prepare(`DELETE FROM attachments WHERE file_id IN (${placeholders(removedIds.length)})`).bind(...removedIds),
       env.DB.prepare(`DELETE FROM files WHERE id IN (${placeholders(removedIds.length)})`).bind(...removedIds)
     ]);
+    invalidateFileStorageStatus();
   }
   const newIds = (uploadedFiles || []).map((item) => String(item.id || '')).filter(Boolean);
   if (newIds.length) {
@@ -1365,20 +1373,42 @@ async function guestHeartbeat(env, session) {
 }
 
 async function fileStorageStatus(env) {
-  const row = await env.DB.prepare('SELECT COALESCE(SUM(size),0) AS used_bytes,COUNT(*) AS file_count FROM files').first();
-  const usedBytes = Number(row && row.used_bytes || 0);
-  const percent = Math.min(999, Math.round((usedBytes / FREE_R2_STORAGE_BYTES) * 1000) / 10);
-  let level = 'normal';
-  if (percent >= 95) level = 'critical';
-  else if (percent >= 85) level = 'warning';
-  else if (percent >= 70) level = 'notice';
-  return {
-    usedBytes,
-    fileCount: Number(row && row.file_count || 0),
-    guideBytes: FREE_R2_STORAGE_BYTES,
-    percent,
-    level
-  };
+  if (fileStorageStatusCache && Date.now() - fileStorageStatusCacheAt < 5 * 60 * 1000) {
+    return fileStorageStatusCache;
+  }
+  if (fileStorageStatusPromise) return fileStorageStatusPromise;
+  const generation = fileStorageStatusGeneration;
+  let pending;
+  pending = (async () => {
+    const row = await env.DB.prepare('SELECT COALESCE(SUM(size),0) AS used_bytes,COUNT(*) AS file_count FROM files').first();
+    const usedBytes = Number(row && row.used_bytes || 0);
+    const percent = Math.min(999, Math.round((usedBytes / FREE_R2_STORAGE_BYTES) * 1000) / 10);
+    let level = 'normal';
+    if (percent >= 95) level = 'critical';
+    else if (percent >= 85) level = 'warning';
+    else if (percent >= 70) level = 'notice';
+    const result = {
+      usedBytes,
+      fileCount: Number(row && row.file_count || 0),
+      guideBytes: FREE_R2_STORAGE_BYTES,
+      percent,
+      level
+    };
+    if (generation === fileStorageStatusGeneration) {
+      fileStorageStatusCache = result;
+      fileStorageStatusCacheAt = Date.now();
+    }
+    return result;
+  })().finally(() => { if (fileStorageStatusPromise === pending) fileStorageStatusPromise = null; });
+  fileStorageStatusPromise = pending;
+  return pending;
+}
+
+function invalidateFileStorageStatus() {
+  fileStorageStatusGeneration += 1;
+  fileStorageStatusCache = null;
+  fileStorageStatusCacheAt = 0;
+  fileStorageStatusPromise = null;
 }
 
 async function createClass(env, session, payload) {
@@ -2039,6 +2069,7 @@ async function sendFileToDrive(env, request, session, fileId) {
     env.DB.prepare('DELETE FROM attachments WHERE file_id=?').bind(context.row.id),
     env.DB.prepare('DELETE FROM files WHERE id=?').bind(context.row.id)
   ]);
+  invalidateFileStorageStatus();
   try {
     await env.FILES.delete(context.row.r2_key);
   } catch (error) {
@@ -2131,8 +2162,11 @@ async function handleAction(request, env) {
     case 'reorderClasses': return reorderClasses(env, session, payload);
     case 'deleteClass': return deleteClass(env, session, payload);
     case 'getTeacherClass':
-      await ownedClass(env, session, payload.classId);
-      return classData(env, String(payload.classId));
+      {
+        const classRow = await ownedClass(env, session, payload.classId);
+        // ownedClass already read the authoritative version with the ownership check.
+        return classData(env, classRow.id, '', Number(classRow.version || 1));
+      }
     case 'getStudentClass': return classData(env, session.class_id, session.user_id);
     case 'upsertContent': return upsertContent(env, session, payload);
     case 'deleteContent': return deleteContent(env, session, payload);
@@ -2196,6 +2230,7 @@ async function handleUpload(request, env) {
     await env.DB.prepare(
       'INSERT INTO files(id,r2_key,name,mime_type,size,uploader_role,uploader_id,created_at,claimed_at) VALUES(?,?,?,?,?,?,?,?,\'\')'
     ).bind(id, key, name, mimeType, declaredSize, session.role, session.user_id, nowIso()).run();
+    invalidateFileStorageStatus();
   } catch (error) {
     await env.FILES.delete(key);
     throw error;

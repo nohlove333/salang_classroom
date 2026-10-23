@@ -86,6 +86,7 @@
     try {
       var data = await API.request('teacherDashboard', {}, 'teacher');
       dashboardData = data;
+      storageLastCheckedAt = Date.now();
       paintDashboard(container, data);
     } catch (error) {
       if (error.code === 'UNAUTHORIZED' || error.code === 'SESSION_EXPIRED') return;
@@ -534,20 +535,16 @@
     try { localStorage.setItem(storageAlertStorageKey, JSON.stringify({ level: level, shownAt: Date.now() })); } catch (error) {}
   }
 
-  function checkStorageStatus() {
-    if (Date.now() - storageLastCheckedAt < 10 * 60 * 1000) return;
+  function refreshDashboardStorage(container, force) {
+    if (!force && Date.now() - storageLastCheckedAt < 10 * 60 * 1000) return;
     storageLastCheckedAt = Date.now();
-    API.request('getStorageStatus', {}, 'teacher', 1).then(notifyStorageStatus).catch(function () {});
-  }
-
-  function refreshDashboardStorage(container) {
     API.request('getStorageStatus', {}, 'teacher', 1).then(function (storage) {
       if (!dashboardData || !container || !container.isConnected) return;
       dashboardData.storage = storage;
       var current = container.querySelector('.storage-status');
       if (current) current.outerHTML = storageStatusHtml(storage);
       notifyStorageStatus(storage);
-    }).catch(function () {});
+    }).catch(function () { storageLastCheckedAt = 0; });
   }
 
   function classSortToolbar(active) {
@@ -2033,7 +2030,6 @@
           Number(event.version) <= Number(classData.classInfo.version || 0)) return Promise.resolve();
       if (classSyncBusy) { syncAgain = true; return Promise.resolve(); }
       classSyncBusy = true;
-      checkStorageStatus();
       return API.request('heartbeat', { classId: classId, knownVersion: classData && classData.classInfo.version }, 'teacher', 0).then(function (response) {
         if (classData && response && response.version != null &&
             Number(response.version) !== Number(classData.classInfo.version)) {
