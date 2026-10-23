@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v52';
+const RELEASE = '2026-10-23-v53';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -1816,8 +1816,10 @@ async function clearClassTimer(env, session, payload) {
 
 async function heartbeat(env, session, payload) {
   const classId = session.role === 'student' ? session.class_id : String(payload.classId || '');
-  if (session.role !== 'student') await ownedClass(env, session, classId);
-  const classRow = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
+  // The ownership query already includes the version for teachers.
+  const classRow = session.role === 'student'
+    ? await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first()
+    : await ownedClass(env, session, classId);
   const version = Number(classRow && classRow.version || 1);
   const changed = Number(payload.knownVersion) !== version;
   const result = { version, unchanged: !changed };

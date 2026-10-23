@@ -52,6 +52,10 @@ async function call(action, payload = {}) {
 await call('getTeacherClass', { classId: 'class-a' });
 assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
   'teacher class loading should reuse the version read for ownership validation');
+sqlLog.length = 0;
+await call('heartbeat', { classId: 'class-a', knownVersion: 1 });
+assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
+  'teacher heartbeat should reuse the version read for ownership validation');
 
 sqlLog.length = 0;
 await call('teacherDashboard');
