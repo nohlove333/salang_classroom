@@ -702,6 +702,45 @@
     '</div>';
   }
 
+  var timerAudioContext = null;
+
+  function ensureTimerAudio() {
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    if (!timerAudioContext) timerAudioContext = new AudioContextClass();
+    if (timerAudioContext.state === 'suspended') timerAudioContext.resume().catch(function () {});
+    return timerAudioContext;
+  }
+
+  document.addEventListener('pointerdown', ensureTimerAudio, { once: true, passive: true });
+  document.addEventListener('keydown', ensureTimerAudio, { once: true });
+
+  function playTimerSound(name) {
+    var context = ensureTimerAudio();
+    if (!context) return false;
+    var patterns = {
+      bell: [{ frequency: 880, offset: 0, length: 0.52 }, { frequency: 1174, offset: 0.18, length: 0.72 }],
+      chime: [{ frequency: 659, offset: 0, length: 0.48 }, { frequency: 988, offset: 0.16, length: 0.6 }, { frequency: 1319, offset: 0.34, length: 0.72 }],
+      woodblock: [{ frequency: 740, offset: 0, length: 0.12 }, { frequency: 587, offset: 0.2, length: 0.12 }, { frequency: 740, offset: 0.4, length: 0.16 }],
+      ascending: [{ frequency: 523, offset: 0, length: 0.18 }, { frequency: 659, offset: 0.2, length: 0.18 }, { frequency: 784, offset: 0.4, length: 0.18 }, { frequency: 1047, offset: 0.6, length: 0.42 }]
+    };
+    (patterns[name] || patterns.bell).forEach(function (note) {
+      var oscillator = context.createOscillator();
+      var gain = context.createGain();
+      var start = context.currentTime + note.offset;
+      oscillator.type = name === 'woodblock' ? 'square' : 'sine';
+      oscillator.frequency.setValueAtTime(note.frequency, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(name === 'woodblock' ? 0.11 : 0.16, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + note.length);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(start);
+      oscillator.stop(start + note.length + 0.02);
+    });
+    return true;
+  }
+
   window.LearnUI = {
     escape: escapeHtml,
     attr: attr,
@@ -720,6 +759,7 @@
     previewFile: previewAttachment,
     downloadFile: downloadAttachment,
     bindFiles: bindAttachmentClicks,
+    playTimerSound: playTimerSound,
     empty: emptyState
   };
 })();

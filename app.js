@@ -215,19 +215,23 @@
       location.hash = studentResumeRoute();
       return;
     }
+    var params = new URLSearchParams(window.location.search || '');
+    var qrClassCode = String(params.get('classCode') || '').trim().toUpperCase();
     app.innerHTML =
       '<section class="auth-page">' +
         '<div class="auth-intro student-auth-intro"><p class="eyebrow">For student</p>' +
           '<h1>우리 반 수업<br>공간으로 들어가요.</h1>' +
-          '<p>선생님께 받은 클래스 코드, 출석번호, 4자리 비밀번호를 입력하세요.</p></div>' +
+          '<p>클래스 코드와 출석번호를 입력하고, 나만의 닉네임과 비밀번호로 로그인하세요.</p></div>' +
         '<div class="auth-card"><h2>학생 로그인</h2><p>내 정보는 우리 반 수업 공간에서만 사용돼요.</p>' +
           '<form class="form-stack" data-student-login>' +
-            '<div class="field"><label for="student-class-code">클래스 코드</label><input id="student-class-code" name="classCode" autocomplete="off" required maxlength="16" placeholder="예: LOVE01"></div>' +
+            '<div class="field"><label for="student-class-code">클래스 코드</label><input id="student-class-code" name="classCode" autocomplete="off" required maxlength="16" placeholder="예: LOVE01" value="' + UI.attr(qrClassCode) + '"></div>' +
             '<div class="form-row">' +
               '<div class="field"><label for="student-number">출석번호</label><input id="student-number" name="number" type="number" inputmode="numeric" min="1" max="999" required placeholder="예: 7"></div>' +
-              '<div class="field"><label for="student-pin">비밀번호</label><input id="student-pin" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="current-password" required placeholder="4자리"></div>' +
+              '<div class="field"><label for="student-nickname">닉네임</label><input id="student-nickname" name="nickname" autocomplete="nickname" required maxlength="20" placeholder="내가 사용할 별명"></div>' +
             '</div>' +
-            (window.LEARN_CONFIG.demoMode ? '<div class="info-box">미리보기: 클래스 코드 LOVE01, 출석번호 1, 비밀번호는 아무 4자리 숫자를 입력하세요.</div>' : '') +
+            '<div class="field"><label for="student-password">비밀번호</label><input id="student-password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required placeholder="8자 이상"></div>' +
+            '<div class="field"><label for="student-initial-pin">처음 로그인용 초기 비밀번호 <span class="muted-text">(처음 한 번만)</span></label><input id="student-initial-pin" name="initialPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="선생님이 준 4자리 숫자"><small class="field-help">처음 로그인할 때만 필요해요. 입력한 뒤 닉네임과 새 비밀번호로 계정을 만들어요.</small></div>' +
+            (window.LEARN_CONFIG.demoMode ? '<div class="info-box">미리보기에서는 출석번호 1과 원하는 닉네임·비밀번호를 입력해 보세요.</div>' : '') +
             '<button class="button" type="submit">우리 반 입장</button>' +
           '</form>' +
         '</div>' +
@@ -242,7 +246,9 @@
         var result = await API.request('studentLogin', {
           classCode: String(values.get('classCode') || '').trim().toUpperCase(),
           number: Number(values.get('number')),
-          pin: String(values.get('pin') || '')
+          nickname: String(values.get('nickname') || '').trim(),
+          password: String(values.get('password') || ''),
+          initialPin: String(values.get('initialPin') || '')
         });
         window.LearnSession.set('student', result);
         activateRole('student', '#/student/class/announcements');

@@ -179,7 +179,8 @@
   function timerBanner(timer) {
     if (!timer) return '';
     return '<section class="class-timer timer-widget student-timer" data-timer-widget data-timer-starts="' +
-      UI.attr(timer.startedAt || '') + '" data-timer-ends="' + UI.attr(timer.endsAt || '') + '" aria-live="polite">' +
+      UI.attr(timer.startedAt || '') + '" data-timer-ends="' + UI.attr(timer.endsAt || '') + '" data-timer-sound="' +
+      UI.attr(timer.sound || 'bell') + '" data-timer-id="' + UI.attr(timer.updatedAt || timer.startedAt || '') + '" aria-live="polite">' +
       '<div class="timer-orbit" aria-hidden="true"><span>⏱</span></div>' +
       '<div class="timer-copy"><span class="timer-kicker">ACTIVITY TIMER</span><strong>' + UI.escape(timer.title || '활동 시간') +
         '</strong><small data-timer-caption>남은 활동 시간</small></div>' +
@@ -198,6 +199,11 @@
         var total = Math.max(1, end - start);
         var progress = Number.isFinite(total) && Number.isFinite(remaining) ? Math.max(0, Math.min(1, remaining / total)) : 0;
         var seconds = Math.ceil(remaining / 1000);
+        if (!seconds && widget.__timerWasRunning && widget.__timerAlarmId !== widget.dataset.timerId) {
+          widget.__timerAlarmId = widget.dataset.timerId;
+          UI.playTimerSound(widget.dataset.timerSound || 'bell');
+        }
+        if (seconds) widget.__timerWasRunning = true;
         var hours = Math.floor(seconds / 3600);
         var minutes = Math.floor((seconds % 3600) / 60);
         var remainder = seconds % 60;

@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 
 const source = (await readFile(new URL('../worker/index.js', import.meta.url), 'utf8'))
-  .replace("import qrcode from 'qrcode-generator';", 'const qrcode = () => { throw new Error("QR not used in read optimization tests"); };');
+  .replace("import qrcode from 'qrcode-generator';", 'const qrcode = () => { throw new Error("QR not used in read optimization tests"); };')
+  .replace("sound TEXT NOT NULL DEFAULT 'bell',", '');
 const workerModule = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { SCHEMA };').toString('base64'));
 const worker = workerModule.default;
 const db = new DatabaseSync(':memory:');
@@ -50,12 +51,29 @@ async function call(action, payload = {}) {
 }
 
 await call('getTeacherClass', { classId: 'class-a' });
+assert.ok(db.prepare('PRAGMA table_info(class_timers)').all().some((column) => column.name === 'sound'),
+  'existing timer tables receive a non-destructive sound column upgrade');
 assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
   'teacher class loading should reuse the version read for ownership validation');
 sqlLog.length = 0;
 await call('heartbeat', { classId: 'class-a', knownVersion: 1 });
 assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
   'teacher heartbeat should reuse the version read for ownership validation');
+
+const timer = await call('startClassTimer', {
+  classId: 'class-a', title: '모둠 활동', durationSeconds: 60, sound: 'ascending'
+});
+assert.equal(timer.sound, 'ascending', 'timer sound choice is saved and returned to class clients');
+const unsupportedSound = await call('startClassTimer', {
+  classId: 'class-a', title: '다시 시작', durationSeconds: 60, sound: 'unsupported'
+});
+assert.equal(unsupportedSound.sound, 'bell', 'unknown timer sounds safely fall back to bell');
+
+const roomOne = await call('createGuestRoom', { title: '현장 참여방 1' });
+const roomTwo = await call('createGuestRoom', { title: '현장 참여방 2' });
+assert.notEqual(roomOne.id, roomTwo.id, 'teachers can open additional one-time rooms');
+assert.equal(db.prepare('SELECT COUNT(*) AS count FROM guest_rooms WHERE teacher_id=?').get('teacher-a').count, 2,
+  'creating another one-time room preserves the previously created room');
 
 sqlLog.length = 0;
 await call('teacherDashboard');
@@ -78,4 +96,14 @@ const teacherSource = await readFile(new URL('../public/teacher.js', import.meta
 assert.doesNotMatch(teacherSource.slice(teacherSource.indexOf('function startClassSync'), teacherSource.indexOf('async function renderGuestRoom')),
   /checkStorageStatus\s*\(/, 'class change events should not trigger global file-storage reads');
 
-console.log('PASS: teacher class version query reuse, shared storage aggregate, file-write invalidation, and no storage scan on class sync.');
+const studentSource = await readFile(new URL('../public/student.js', import.meta.url), 'utf8');
+const postRead = studentSource.slice(studentSource.indexOf('function openBoardPost('), studentSource.indexOf('function startHeartbeat('));
+assert.doesNotMatch(postRead, /API\.request\s*\(|location\.(?:reload|assign)\s*\(/,
+  'reading a board post does not force a request or full-page refresh');
+const uiSource = await readFile(new URL('../public/ui.js', import.meta.url), 'utf8');
+for (const sound of ['bell', 'chime', 'woodblock', 'ascending']) {
+  assert.ok(teacherSource.includes('value="' + sound + '"'), 'teacher timer offers the ' + sound + ' sound');
+  assert.ok(uiSource.includes(sound + ':'), 'shared timer audio supports the ' + sound + ' sound');
+}
+
+console.log('PASS: read optimization, safe timer sounds, repeatable one-time rooms, and post reading without forced refresh.');

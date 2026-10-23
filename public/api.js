@@ -889,6 +889,10 @@
         var matchedStudent = state.students.find(function (item) {
           return item.classId === matchedClass.id && Number(item.number) === Number(payload.number || 1);
         }) || state.students[0];
+        if (payload.nickname) {
+          matchedStudent.name = String(payload.nickname).trim().slice(0, 20);
+          setDemoState(state);
+        }
         result = {
           token: 'demo_student_' + matchedStudent.id,
           user: clone(matchedStudent),
