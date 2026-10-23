@@ -12,6 +12,7 @@
   var classSyncVisibilityHandler = null;
   var classSyncBusy = false;
   var classRefreshBusy = false;
+  var pendingClassRefresh = null;
   var storageLastCheckedAt = 0;
   var storageAlertStorageKey = 'learn_storage_alert_v1';
   var activeClassContainer = null;
@@ -29,6 +30,14 @@
   var guestTeacherNoticeOpen = {};
   var selectedGuestBoards = {};
   var guestRoomCollectionStorageKey = 'learn_guest_room_collection_open_v1';
+
+  document.addEventListener('learn:modalclosed', function () {
+    if (!pendingClassRefresh || document.querySelector('.modal')) return;
+    var pending = pendingClassRefresh;
+    pendingClassRefresh = null;
+    if (location.hash.indexOf('#/teacher/class/' + encodeURIComponent(pending.classId) + '/') !== 0) return;
+    refreshClassSilently(pending.classId, pending.data);
+  });
 
   function classSortMode() {
     try {
@@ -763,6 +772,10 @@
   }
 
   async function refreshClassSilently(classId, latest) {
+    if (document.querySelector('.modal')) {
+      pendingClassRefresh = { classId: classId, data: latest || null };
+      return;
+    }
     if (classRefreshBusy || !activeClassContainer || !activeClassContainer.isConnected) return;
     classRefreshBusy = true;
     var scrollX = window.scrollX;
@@ -2007,7 +2020,17 @@
     classSyncVisibilityHandler = null;
     classSyncBusy = false;
     var syncAgain = false;
-    function heartbeat() {
+    function heartbeat(event) {
+      if (event && event.type === 'class-deleted' && String(event.classId) === String(classId)) {
+        stopClassSync();
+        classData = null;
+        dashboardData = null;
+        UI.toast('클래스가 삭제되었습니다. 클래스 목록으로 이동합니다.', 'error');
+        location.hash = '#/teacher';
+        return Promise.resolve();
+      }
+      if (event && event.version != null && classData &&
+          Number(event.version) <= Number(classData.classInfo.version || 0)) return Promise.resolve();
       if (classSyncBusy) { syncAgain = true; return Promise.resolve(); }
       classSyncBusy = true;
       checkStorageStatus();
@@ -2385,6 +2408,7 @@
     classSyncFallbackTimer = null;
     classSyncVisibilityHandler = null;
     classSyncBusy = false;
+    pendingClassRefresh = null;
     if (countdownTimer) window.cancelAnimationFrame(countdownTimer);
     countdownTimer = null;
     if (guestRoomTimer) guestRoomTimer();
@@ -2406,5 +2430,6 @@
     stop: stopClassSync
   };
 })();
+
 
 

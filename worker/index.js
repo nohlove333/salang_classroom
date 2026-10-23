@@ -771,17 +771,22 @@ async function readClassSnapshot(env, classId, studentId = '') {
 }
 
 async function touchClass(env, classId) {
-  await env.DB.prepare('UPDATE classes SET version=version+1, updated_at=? WHERE id=?').bind(nowIso(), classId).run();
-  await notifyClassSync(env, classId);
+  const row = await env.DB.prepare('UPDATE classes SET version=version+1, updated_at=? WHERE id=? RETURNING version')
+    .bind(nowIso(), classId).first();
+  await notifyClassSync(env, classId, 'class-changed', Number(row && row.version || 0));
 }
 
-async function notifyClassSync(env, classId) {
+async function notifyClassSync(env, classId, type = 'class-changed', version = null) {
   if (!classId) return;
   classSnapshots.delete(String(classId));
   if (!env.CLASS_SYNC) return;
   try {
     const stub = env.CLASS_SYNC.get(env.CLASS_SYNC.idFromName(String(classId)));
-    await stub.fetch('https://class-sync/notify', { method: 'POST' });
+    await stub.fetch('https://class-sync/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, classId: String(classId), version, eventId: crypto.randomUUID() })
+    });
   } catch (error) {
     console.error('Class sync notification failed:', String(error && error.message || error));
   }
@@ -1405,7 +1410,7 @@ async function updateClass(env, session, payload) {
   await env.DB.prepare(
     'UPDATE classes SET name=?,subject=?,school=?,version=version+1,updated_at=? WHERE id=? AND teacher_id=?'
   ).bind(name, subject, school, nowIso(), row.id, session.user_id).run();
-  await notifyClassSync(env, row.id);
+  await notifyClassSync(env, row.id, 'class-changed', Number(row.version || 0) + 1);
   return classJson(await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(row.id).first());
 }
 
@@ -1445,7 +1450,7 @@ async function deleteClass(env, session, payload) {
     env.DB.prepare('DELETE FROM students WHERE class_id=?').bind(row.id),
     env.DB.prepare('DELETE FROM classes WHERE id=?').bind(row.id)
   ]);
-  await notifyClassSync(env, row.id);
+  await notifyClassSync(env, row.id, 'class-deleted', Number(row.version || 0) + 1);
   return { deleted: true };
 }
 
@@ -2314,7 +2319,14 @@ export class ClassSyncHub {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/notify' && request.method === 'POST') {
-      const message = JSON.stringify({ type: 'class-changed' });
+      let event = {};
+      try { event = await request.json(); } catch (_) {}
+      const message = JSON.stringify({
+        type: event.type === 'class-deleted' ? 'class-deleted' : 'class-changed',
+        classId: String(event.classId || ''),
+        version: event.version == null ? null : Number(event.version),
+        eventId: String(event.eventId || crypto.randomUUID())
+      });
       let sent = 0;
       for (const socket of this.ctx.getWebSockets()) {
         try { socket.send(message); sent += 1; }
@@ -2334,5 +2346,6 @@ export class ClassSyncHub {
     });
   }
 }
+
 
 

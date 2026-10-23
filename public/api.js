@@ -380,11 +380,39 @@
     var active = true;
     var socket = null;
     var retryTimer = null;
+    var changeTimer = null;
+    var pendingChange = null;
+    var seenEventIds = Object.create(null);
     var retryDelay = 1000;
     function visible() { return document.visibilityState !== 'hidden' && navigator.onLine !== false; }
-    function notifyChange() {
+    function notifyChange(event) {
       if (typeof onChange !== 'function') return;
-      try { Promise.resolve(onChange()).catch(function () {}); } catch (error) {}
+      if (event && event.eventId) {
+        if (seenEventIds[event.eventId]) return;
+        seenEventIds[event.eventId] = true;
+        var seen = Object.keys(seenEventIds);
+        if (seen.length > 64) delete seenEventIds[seen[0]];
+      }
+      if (event && event.type === 'class-deleted') {
+        if (changeTimer) window.clearTimeout(changeTimer);
+        changeTimer = null;
+        pendingChange = null;
+        try { Promise.resolve(onChange(event)).catch(function () {}); } catch (error) {}
+        return;
+      }
+      if (!pendingChange || pendingChange.type === 'reconnected' ||
+          (event && event.type === 'class-changed' && event.version == null) ||
+          (event && event.version != null && pendingChange.version != null &&
+            Number(event.version) >= Number(pendingChange.version))) {
+        pendingChange = event || { type: 'reconnected' };
+      }
+      if (changeTimer) return;
+      changeTimer = window.setTimeout(function () {
+        changeTimer = null;
+        var change = pendingChange || { type: 'reconnected' };
+        pendingChange = null;
+        try { Promise.resolve(onChange(change)).catch(function () {}); } catch (error) {}
+      }, 160);
     }
     function clearRetry() { if (retryTimer) window.clearTimeout(retryTimer); retryTimer = null; }
     function closeSocket() {
@@ -419,7 +447,7 @@
           if (socket !== current || typeof onChange !== 'function') return;
           try {
             var message = JSON.parse(event.data || '{}');
-            if (message.type === 'class-changed') notifyChange();
+            if (message.type === 'class-changed' || message.type === 'class-deleted') notifyChange(message);
           } catch (error) {}
         };
         current.onerror = function () { try { current.close(); } catch (error) {} };
@@ -438,6 +466,9 @@
       stop: function () {
         active = false;
         clearRetry();
+        if (changeTimer) window.clearTimeout(changeTimer);
+        changeTimer = null;
+        pendingChange = null;
         closeSocket();
         document.removeEventListener('visibilitychange', resume);
         window.removeEventListener('online', resume);
@@ -1330,3 +1361,4 @@
   };
   window.LearnApiError = ApiError;
 })();
+
