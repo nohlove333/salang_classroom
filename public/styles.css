@@ -756,7 +756,7 @@ video {
 }
 
 .storage-status {
-  margin: 0 0 20px;
+  margin: 20px 0 0;
   padding: 18px 20px;
   border: 1px solid rgba(255, 255, 255, 0.86);
   border-radius: 20px;
@@ -774,7 +774,13 @@ video {
   justify-content: space-between;
   align-items: flex-start;
   gap: 18px;
+  cursor: pointer;
+  list-style: none;
 }
+
+.storage-status-head::-webkit-details-marker { display: none; }
+.storage-status-head::after { content: '⌄'; margin-left: 8px; color: var(--muted); font-size: 1.1rem; }
+.storage-status[open] .storage-status-head::after { content: '⌃'; }
 
 .storage-status-head strong,
 .storage-status-head span { display: block; }

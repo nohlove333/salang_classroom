@@ -14,6 +14,7 @@
   var classRefreshBusy = false;
   var pendingClassRefresh = null;
   var storageLastCheckedAt = 0;
+  var storageDetailOpen = false;
   var storageAlertStorageKey = 'learn_storage_alert_v1';
   var activeClassContainer = null;
   var activeClassTab = 'announcements';
@@ -112,7 +113,6 @@
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
             '</div>' +
           '</div>' +
-          storageStatusHtml(data.storage) +
           '<div class="summary-strip" aria-label="전체 현황">' +
             summaryCell('클래스', data.totals.classes) +
             summaryCell('등록 학생', data.totals.students) +
@@ -123,7 +123,9 @@
           (data.classes.length
             ? classSortToolbar(sortMode) + renderClassCollection(data.classes, sortMode)
             : '<div class="panel">' + UI.empty('첫 클래스를 만들어 보세요', '클래스 코드와 이름을 정하면 바로 학생을 등록할 수 있어요.', '<button class="button" type="button" data-create-class>클래스 만들기</button>') + '</div>') +
+          storageStatusHtml(data.storage) +
         '</section>';
+    bindStorageDetails(container);
     container.querySelectorAll('[data-create-class]').forEach(function (button) {
         button.addEventListener('click', function () { openClassEditor(container); });
       });
@@ -633,13 +635,19 @@
         : level === 'notice'
           ? '저장공간이 70%를 넘었어요. 여유 있을 때 오래된 파일을 정리해 주세요.'
           : '첨부파일 저장공간이 충분해요.';
-    return '<section class="storage-status ' + UI.attr(level) + '" aria-label="첨부파일 저장공간">' +
-      '<div class="storage-status-head"><div><strong>첨부파일 저장공간</strong><span>' + UI.escape(message) + '</span></div>' +
-        '<b>' + UI.escape(UI.size(storage.usedBytes || 0)) + ' / 10 GB</b></div>' +
+    return '<details class="storage-status ' + UI.attr(level) + '" aria-label="첨부파일 저장공간"' + (storageDetailOpen ? ' open' : '') + '>' +
+      '<summary class="storage-status-head"><div><strong>첨부파일 저장공간</strong><span>' + UI.escape(message) + '</span></div>' +
+        '<b>' + UI.escape(UI.size(storage.usedBytes || 0)) + ' / 10 GB</b></summary>' +
       '<div class="storage-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
         UI.attr(Math.min(100, percent)) + '"><span style="width:' + Math.min(100, percent) + '%"></span></div>' +
       '<small>파일 ' + UI.escape(storage.fileCount || 0) + '개 · 관리 기준의 ' + UI.escape(percent) + '% 사용</small>' +
-    '</section>';
+    '</details>';
+  }
+
+  function bindStorageDetails(container) {
+    var details = container.querySelector('.storage-status');
+    if (!details) return;
+    details.addEventListener('toggle', function () { storageDetailOpen = details.open; });
   }
 
   function notifyStorageStatus(storage) {
@@ -666,7 +674,10 @@
       if (!dashboardData || !container || !container.isConnected) return;
       dashboardData.storage = storage;
       var current = container.querySelector('.storage-status');
-      if (current) current.outerHTML = storageStatusHtml(storage);
+      if (current) {
+        current.outerHTML = storageStatusHtml(storage);
+        bindStorageDetails(container);
+      }
       notifyStorageStatus(storage);
     }).catch(function () { storageLastCheckedAt = 0; });
   }
