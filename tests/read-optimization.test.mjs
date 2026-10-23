@@ -40,14 +40,18 @@ const rawToken = 'teacher-token';
 const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawToken))).toString('hex');
 db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run(hash, 'teacher', 'teacher-a', '', expiry, now);
 
-async function call(action, payload = {}) {
+async function request(action, payload = {}, token = rawToken) {
   const response = await worker.fetch(new Request('https://local.test/api', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, payload, token: rawToken })
+    body: JSON.stringify({ action, payload, token })
   }), env);
   const body = await response.json();
-  assert.equal(response.status, 200, JSON.stringify(body));
-  return body.data;
+  return { status: response.status, body };
+}
+async function call(action, payload = {}, token = rawToken) {
+  const response = await request(action, payload, token);
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  return response.body.data;
 }
 
 await call('getTeacherClass', { classId: 'class-a' });
@@ -74,6 +78,43 @@ const roomTwo = await call('createGuestRoom', { title: '현장 참여방 2' });
 assert.notEqual(roomOne.id, roomTwo.id, 'teachers can open additional one-time rooms');
 assert.equal(db.prepare('SELECT COUNT(*) AS count FROM guest_rooms WHERE teacher_id=?').get('teacher-a').count, 2,
   'creating another one-time room preserves the previously created room');
+
+const firstJoin = await call('joinGuestRoom', { code: roomOne.code });
+const originalPost = await call('upsertGuestPost', { kind: 'opinion', text: '다시 열어도 남아야 하는 의견' }, firstJoin.token);
+const closedRoom = await call('closeGuestRoom', { roomId: roomOne.id, status: 'closed' });
+assert.equal(closedRoom.status, 'closed');
+assert.equal(db.prepare('SELECT COUNT(*) AS count FROM guest_posts WHERE room_id=?').get(roomOne.id).count, 1,
+  'closing a room retains existing posts');
+const deniedJoin = await request('joinGuestRoom', { code: roomOne.code });
+assert.equal(deniedJoin.status, 410, 'closed rooms reject new participant entry');
+
+db.prepare('INSERT INTO teachers VALUES(?,?,?,?,?,?)').run('teacher-b', 'other@example.test', '다른 교사', 'x', 'x', now);
+const foreignToken = 'foreign-teacher-token';
+const foreignHash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(foreignToken))).toString('hex');
+db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run(foreignHash, 'teacher', 'teacher-b', '', expiry, now);
+const forbiddenReopen = await request('reopenGuestRoom', { roomId: roomOne.id }, foreignToken);
+assert.equal(forbiddenReopen.status, 404, 'only the room owning teacher can reopen it');
+
+const reopenedRoom = await call('reopenGuestRoom', { roomId: roomOne.id, durationHours: 24 });
+assert.equal(reopenedRoom.id, roomOne.id, 'reopening updates the existing room');
+assert.equal(reopenedRoom.code, roomOne.code, 'reopening reuses the existing participant code and QR target');
+assert.equal(reopenedRoom.status, 'open');
+assert.ok(new Date(reopenedRoom.expiresAt).getTime() > Date.now(), 'reopening extends the room expiry');
+assert.equal(db.prepare('SELECT COUNT(*) AS count FROM guest_posts WHERE room_id=?').get(roomOne.id).count, 1,
+  'reopening retains prior activity');
+const secondJoin = await call('joinGuestRoom', { code: roomOne.code });
+const roomAfterJoin = await call('getGuestRoom', {}, secondJoin.token);
+assert.equal(roomAfterJoin.room.id, roomOne.id);
+assert.equal(roomAfterJoin.posts.some((post) => post.id === originalPost.id), true,
+  'new participants can re-enter and read retained posts');
+await call('upsertGuestPost', { kind: 'opinion', text: '재개방 후 작성 및 동기화 확인' }, secondJoin.token);
+const syncedRoom = await call('getTeacherGuestRoom', { roomId: roomOne.id, knownVersion: reopenedRoom.version });
+assert.equal(syncedRoom.posts.some((post) => post.text === '재개방 후 작성 및 동기화 확인'), true,
+  'teacher sees a newly written post after room sync');
+const closedAgain = await call('closeGuestRoom', { roomId: roomOne.id, status: 'closed' });
+assert.equal(closedAgain.status, 'closed', 'teacher can close a reopened room again');
+assert.equal(db.prepare('SELECT COUNT(*) AS count FROM guest_posts WHERE room_id=?').get(roomOne.id).count, 2,
+  'closing again retains both pre-existing and reopened activity');
 
 sqlLog.length = 0;
 await call('teacherDashboard');
