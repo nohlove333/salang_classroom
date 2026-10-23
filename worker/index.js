@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v62';
+const RELEASE = '2026-10-24-v63';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -2325,6 +2325,7 @@ async function handleAction(request, env) {
   if (action === 'teacherLogin') return teacherLogin(env, payload);
   if (action === 'studentLogin') return studentLogin(env, payload);
   if (!(await schemaReady(env))) throw new AppError('먼저 교사 계정을 만들어 주세요.', 'SETUP_REQUIRED', 404);
+  if (/^(workspace|calendar)/.test(action)) return workspaceAction(request, env, await sessionFromToken(env, body.token, 'teacher'), action, payload);
   if (action === 'joinGuestRoom') return joinGuestRoom(env, payload);
   const teacherActions = new Set([
     'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource',
@@ -2514,15 +2515,19 @@ export default {
       if (url.pathname === '/guest-room-qr.svg' && request.method === 'GET') {
         return guestRoomQr(request);
       }
+      if (url.pathname === '/api/calendar/callback' && request.method === 'GET') return await calendarCallback(request, env);
       if (url.pathname === '/api/health') {
         const databaseReady = await schemaReady(env);
+        if (databaseReady) await ensureWorkspace(env);
         return ok({
           status: 'ok',
           databaseReady,
           featureSchemaReady: databaseReady && featureSchemaVerified,
           databaseIssue: databaseReady && featureSchemaError ? featureSchemaError : '',
           provider: 'cloudflare',
-          release: RELEASE
+          release: RELEASE,
+          workspaceSchemaReady: databaseReady,
+          calendarConfigured: calendarConfigured(env)
         }, request);
       }
       if (url.pathname === '/api/sync' && request.method === 'GET') return await classSyncSocket(request, env);
@@ -2534,7 +2539,11 @@ export default {
         return await handleSignedFile(request, env, fileId);
       }
       if (url.pathname === '/api' && request.method === 'POST') {
-        return ok(await handleAction(request, env), request);
+        const data = await handleAction(request, env);
+        const response = ok(data, request);
+        if (data && data.state && data.url && data.url.startsWith('https://accounts.google.com/')) response.headers.set('Set-Cookie', 'learn_oauth='+data.state+'; Path=/api/calendar; HttpOnly; Secure; SameSite=Lax; Max-Age=600');
+        response.headers.set('Cache-Control', 'no-store');
+        return response;
       }
       if (url.pathname.startsWith('/api')) throw new AppError('API 주소를 찾을 수 없습니다.', 'NOT_FOUND', 404);
       return env.ASSETS.fetch(request);
@@ -2580,3 +2589,123 @@ export class ClassSyncHub {
 
 
 
+
+// Teacher workspace: bounded per-owner JSON documents; Google events never enter D1.
+const workspaceSchema = `CREATE TABLE IF NOT EXISTS teacher_workspace (teacher_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(teacher_id,kind));
+CREATE TABLE IF NOT EXISTS calendar_connections (teacher_id TEXT PRIMARY KEY, encrypted TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS calendar_oauth_states (state TEXT PRIMARY KEY, teacher_id TEXT NOT NULL, verifier TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS calendar_oauth_expires ON calendar_oauth_states(expires);
+CREATE INDEX IF NOT EXISTS contents_class_type_due ON contents(class_id,type,due_at);`;
+let workspaceReady;
+async function ensureWorkspace(env) {
+  if (!workspaceReady) workspaceReady = env.DB.batch(workspaceSchema.split(';').filter(x=>x.trim()).map(sql=>env.DB.prepare(sql))).catch(e=>{workspaceReady=null;throw e;});
+  await workspaceReady;
+}
+function calendarConfigured(env) { return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REDIRECT_URI && env.CALENDAR_TOKEN_KEY); }
+function b64url(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function unb64(s) { return Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')), c=>c.charCodeAt(0)); }
+async function tokenCipher(env, value, decrypt=false, owner='') {
+  const raw = unb64(env.CALENDAR_TOKEN_KEY || '');
+  if(raw.length!==32) throw new AppError('캘린더 암호화 키 설정이 필요합니다.','CALENDAR_SETUP',503);
+  const key=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']);
+  if(decrypt) { const [iv,data]=value.split('.'); return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(iv),additionalData:new TextEncoder().encode(owner)},key,unb64(data)))); }
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  return b64url(iv)+'.'+b64url(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(owner)},key,new TextEncoder().encode(JSON.stringify(value))));
+}
+async function saveGoogleToken(env,owner,value) {
+  await env.DB.prepare('INSERT INTO calendar_connections(teacher_id,encrypted) VALUES(?,?) ON CONFLICT(teacher_id) DO UPDATE SET encrypted=excluded.encrypted').bind(owner,await tokenCipher(env,value,false,owner)).run();
+}
+async function googleToken(env,owner) {
+  const row=await env.DB.prepare('SELECT encrypted FROM calendar_connections WHERE teacher_id=?').bind(owner).first();
+  if(!row) throw new AppError('Google 계정을 연결해 주세요.','CALENDAR_DISCONNECTED',409);
+  const t=await tokenCipher(env,row.encrypted,true,owner);
+  if(t.expires>Date.now()+60000) return t.access_token;
+  const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,refresh_token:t.refresh_token,grant_type:'refresh_token'})});
+  if(!r.ok) throw new AppError('Google 연결을 다시 인증해 주세요.','CALENDAR_RECONNECT',401);
+  const n=await r.json(); await saveGoogleToken(env,owner,{...t,...n,expires:Date.now()+n.expires_in*1000}); return n.access_token;
+}
+async function googleRequest(env,owner,path,options={}) {
+  const token=await googleToken(env,owner);
+  const r=await fetch('https://www.googleapis.com/calendar/v3/'+path,{...options,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json',...options.headers}});
+  if(r.status===412) throw new AppError('다른 곳에서 일정이 변경되었습니다. 최신 일정을 확인한 뒤 다시 저장해 주세요. 작성 내용은 유지됩니다.','CALENDAR_CONFLICT',409);
+  if(r.status===410) throw new AppError('동기화 토큰이 만료되었습니다.','SYNC_RESET',410);
+  if(!r.ok) throw new AppError(r.status===403?'이 캘린더를 수정할 권한이 없거나 API 한도에 도달했습니다.':'Google 요청에 실패했습니다. 작성 내용은 유지됩니다.','GOOGLE_'+r.status,r.status===429?429:502);
+  return r.status===204?{}:r.json();
+}
+async function calendarCallback(request,env) {
+  await ensureWorkspace(env);
+  const u=new URL(request.url), state=u.searchParams.get('state');
+  const row=await env.DB.prepare('DELETE FROM calendar_oauth_states WHERE state=? RETURNING teacher_id,verifier,expires').bind(state||'').first();
+  const cookie=(request.headers.get('Cookie')||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('learn_oauth='));
+  if(!row || row.expires<Date.now() || cookie!=='learn_oauth='+state) throw new AppError('연결 요청이 만료되었거나 브라우저가 다릅니다. 다시 연결해 주세요.','OAUTH_STATE',400);
+  if(u.searchParams.has('error')) return Response.redirect(new URL('/#/teacher/settings',u).href,303);
+  const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,redirect_uri:env.GOOGLE_REDIRECT_URI,code:u.searchParams.get('code')||'',code_verifier:row.verifier,grant_type:'authorization_code'})});
+  if(!r.ok) throw new AppError('Google 연결을 완료하지 못했습니다. 다시 시도해 주세요.','OAUTH_EXCHANGE',400);
+  const t=await r.json(); if(!t.refresh_token) throw new AppError('오프라인 접근 동의가 필요합니다. 다시 연결해 주세요.','OAUTH_REFRESH',400);
+  await saveGoogleToken(env,row.teacher_id,{...t,expires:Date.now()+t.expires_in*1000});
+  return new Response(null,{status:303,headers:{Location:new URL('/#/teacher/calendar',u).href,'Set-Cookie':'learn_oauth=; Path=/api/calendar; HttpOnly; Secure; SameSite=Lax; Max-Age=0','Cache-Control':'no-store'}});
+}
+async function workspaceAction(request,env,session,action,p) {
+  await ensureWorkspace(env); const owner=session.user_id;
+  if(action==='workspaceGet') {
+    const rows=await all(env.DB.prepare('SELECT kind,value,revision FROM teacher_workspace WHERE teacher_id=?').bind(owner));
+    const classes=await all(env.DB.prepare('SELECT id,name,subject FROM classes WHERE teacher_id=? ORDER BY display_order').bind(owner));
+    const connection=await env.DB.prepare('SELECT teacher_id FROM calendar_connections WHERE teacher_id=?').bind(owner).first();
+    const upcoming=await all(env.DB.prepare("SELECT c.id,c.class_id,c.title,c.due_at,k.name AS class_name FROM contents c JOIN classes k ON k.id=c.class_id WHERE k.teacher_id=? AND c.type='assignment' AND c.due_at>=? ORDER BY c.due_at LIMIT 12").bind(owner,new Date().toISOString().slice(0,10)));
+    return {upcoming,documents:Object.fromEntries(rows.map(r=>[r.kind,{value:JSON.parse(r.value),revision:r.revision}])),classes,calendar:{configured:calendarConfigured(env),connected:!!connection}};
+  }
+  if(action==='workspaceSave') {
+    if(!['settings','timetable','records','notes'].includes(p.kind)) throw new AppError('잘못된 저장 항목입니다.','INVALID');
+    if(p.value===undefined || p.value===null) throw new AppError('저장 내용을 확인해 주세요.','INVALID');
+    const value=JSON.stringify(p.value); if(value.length>180000) throw new AppError('저장 용량을 초과했습니다. 기록을 내보내고 나누어 주세요.','TOO_LARGE');
+    if(p.kind==='timetable' && (!Array.isArray(p.value.week)||!Array.isArray(p.value.exceptions))) throw new AppError('시간표 형식을 확인해 주세요.','INVALID');
+    if(p.kind==='records' && !Array.isArray(p.value)) throw new AppError('기록 형식을 확인해 주세요.','INVALID');
+    if(p.kind==='timetable' || p.kind==='records') {
+      const refs=p.kind==='records'?p.value:[...p.value.week,...p.value.exceptions.flatMap(x=>x.lessons||[])];
+      for(const id of new Set(refs.map(x=>x.classId).filter(Boolean))) await ownedClass(env,session,id);
+    }
+    const result=await env.DB.prepare('INSERT INTO teacher_workspace(teacher_id,kind,value,revision) SELECT ?,?,?,1 WHERE ?=0 ON CONFLICT(teacher_id,kind) DO NOTHING').bind(owner,p.kind,value,Number(p.revision||0)).run();
+    if(!Number(result.meta?.changes??result.changes)) {
+      const changed=await env.DB.prepare('UPDATE teacher_workspace SET value=?,revision=revision+1 WHERE teacher_id=? AND kind=? AND revision=? RETURNING revision').bind(value,owner,p.kind,Number(p.revision||0)).first();
+      if(!changed) throw new AppError('다른 창에서 변경되었습니다. 입력을 복사한 뒤 새로 불러와 주세요.','WORKSPACE_CONFLICT',409);
+      return changed;
+    }
+    return {revision:1};
+  }
+  if(action==='calendarConnect') {
+    if(!calendarConfigured(env)) throw new AppError('Google OAuth 서버 설정이 필요합니다. 설정 화면의 안내를 확인해 주세요.','CALENDAR_SETUP',503);
+    const state=crypto.randomUUID(),verifier=b64url(crypto.getRandomValues(new Uint8Array(32)));
+    await env.DB.prepare('DELETE FROM calendar_oauth_states WHERE expires<?').bind(Date.now()).run();
+    await env.DB.prepare('INSERT INTO calendar_oauth_states VALUES(?,?,?,?)').bind(state,owner,verifier,Date.now()+600000).run();
+    const u=new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    u.search=new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,redirect_uri:env.GOOGLE_REDIRECT_URI,response_type:'code',scope:'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly',access_type:'offline',prompt:'consent',state,code_challenge:b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))),code_challenge_method:'S256'}).toString();
+    return {url:u.href,state};
+  }
+  if(action==='calendarDisconnect') {
+    const row=await env.DB.prepare('SELECT encrypted FROM calendar_connections WHERE teacher_id=?').bind(owner).first();
+    let revoked=false;
+    if(row) { const t=await tokenCipher(env,row.encrypted,true,owner); try { revoked=(await fetch('https://oauth2.googleapis.com/revoke',{method:'POST',body:new URLSearchParams({token:t.refresh_token||t.access_token})})).ok; } catch {} }
+    await env.DB.prepare('DELETE FROM calendar_connections WHERE teacher_id=?').bind(owner).run();
+    return {disconnected:true,revoked};
+  }
+  if(action==='calendarList') return googleRequest(env,owner,'users/me/calendarList?maxResults=250'+(p.pageToken?'&pageToken='+encodeURIComponent(p.pageToken):''));
+  const base='calendars/'+encodeURIComponent(String(p.calendarId||'primary'))+'/events';
+  if(action==='calendarEvents') {
+    const q=new URLSearchParams({singleEvents:'true',maxResults:'250',showDeleted:'true'});
+    if(p.syncToken) q.set('syncToken',p.syncToken);
+    else { const start=Date.parse(p.start),end=Date.parse(p.end); if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start||end-start>100*86400000) throw new AppError('조회 기간은 100일 이내로 선택해 주세요.','INVALID'); q.set('timeMin',new Date(start).toISOString()); q.set('timeMax',new Date(end).toISOString()); }
+    if(p.pageToken) q.set('pageToken',p.pageToken);
+    return googleRequest(env,owner,base+'?'+q);
+  }
+  if(action==='calendarEventGet') return googleRequest(env,owner,base+'/'+encodeURIComponent(p.id));
+  if(action==='calendarEventSave' || action==='calendarEventDelete') {
+    if(p.id && !p.etag) throw new AppError('최신 일정 버전이 필요합니다.','ETAG_REQUIRED',409);
+    if(action==='calendarEventDelete') { if(!p.id) throw new AppError('일정을 선택해 주세요.','INVALID'); return googleRequest(env,owner,base+'/'+encodeURIComponent(p.id),{method:'DELETE',headers:{'If-Match':p.etag}}); }
+    const e=p.event||{}; if(!String(e.summary||'').trim()||!e.start||!e.end) throw new AppError('제목과 날짜를 입력해 주세요.','INVALID');
+    const body={}; for(const k of ['summary','start','end','description','location','colorId','recurrence','reminders','extendedProperties']) if(e[k]!==undefined) body[k]=e[k];
+    if(!p.id) { if(!/^[a-v0-9]{16,64}$/.test(p.operationId||'')) throw new AppError('저장 요청 ID가 필요합니다.','INVALID'); body.id=p.operationId; }
+    try { return await googleRequest(env,owner,base+(p.id?'/'+encodeURIComponent(p.id):''),{method:p.id?'PATCH':'POST',headers:p.id?{'If-Match':p.etag}:{},body:JSON.stringify(body)}); }
+    catch(error) { if(!p.id&&error.code==='GOOGLE_409') return googleRequest(env,owner,base+'/'+body.id); throw error; }
+  }
+  throw new AppError('지원하지 않는 업무 요청입니다.','INVALID');
+}

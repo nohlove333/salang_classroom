@@ -67,3 +67,12 @@
 - v53: 교사 heartbeat 및 클래스 조회에서 중복 D1 버전 조회 제거.
 - v52: 전역 첨부파일 사용량 집계 캐시 및 클래스 동기화 경로의 전체 파일 집계 제거.
 - v51: 변경 알림 기반 클래스 동기화와 WebSocket 재연결 복구.
+
+## 2026-10-24 v63
+
+- worker/index.js: teacher_workspace/calendar_connections/calendar_oauth_states, 교사 전용 API, revision 충돌, OAuth PKCE+쿠키, AES-GCM, Calendar CRUD/If-Match/중복 ID/증분 조회.
+- public/workspace.js, workspace.css: 새 교사 업무 영역 및 기존 클래스룸·자료방 통합.
+- public/app.js/index.html: 새 업무 라우팅과 자산 연결. 학생 라우팅 유지.
+- tests/workspace.test.mjs, workspace-ui.test.mjs 및 package.json: 격리 DB/API·뷰 컨트롤러 검증 추가.
+- CALENDAR_SETUP.md 및 .dev.vars.example: 필요한 운영 설정과 실제 검증 절차. 실비밀값 없음.
+- 기존 테스트 전부 및 새 테스트 통과. 실제 브라우저 설치가 실패하여 시각 검증은 미완료. Google 실계정 시험 미완료.

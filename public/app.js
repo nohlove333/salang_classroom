@@ -95,6 +95,7 @@
   }
 
   function cleanupViews() {
+    if (window.Workspace) window.Workspace.stop();
     if (window.TeacherViews) window.TeacherViews.stop();
     if (window.StudentViews) window.StudentViews.stop();
     if (window.GuestViews) window.GuestViews.stop();
@@ -113,14 +114,14 @@
       renderTeacherAuth(false);
     } else if (parts[0] === 'teacher' && parts[1] === 'signup') {
       renderTeacherAuth(true);
-    } else if (parts[0] === 'teacher' && parts[1] === 'resources') {
-      window.TeacherViews.resourcesPage(app);
+    } else if (parts[0] === 'teacher' && ['resources','calendar','timetable','records','settings','classrooms','admin'].includes(parts[1])) {
+      window.Workspace.render(app, parts[1]);
     } else if (parts[0] === 'teacher' && parts[1] === 'class' && parts[2]) {
-      window.TeacherViews.classPage(app, parts[2], parts[3] || 'announcements');
+      window.Workspace.render(app, 'classrooms', function (container) { window.TeacherViews.classPage(container, parts[2], parts[3] || 'announcements'); });
     } else if (parts[0] === 'teacher' && parts[1] === 'quick' && parts[2]) {
-      window.TeacherViews.guestRoomPage(app, parts[2], parts[3] || 'opinion');
+      window.Workspace.render(app, 'classrooms', function (container) { window.TeacherViews.guestRoomPage(container, parts[2], parts[3] || 'opinion'); });
     } else if (parts[0] === 'teacher' && parts.length === 1) {
-      window.TeacherViews.dashboard(app);
+      window.Workspace.render(app, 'home');
     } else if (parts[0] === 'student' && parts[1] === 'login') {
       renderStudentLogin();
     } else if (parts[0] === 'student' && parts[1] === 'class') {

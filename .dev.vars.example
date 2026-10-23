@@ -1,3 +1,9 @@
 TEACHER_SETUP_KEY="replace-with-a-long-private-key"
 DRIVE_ARCHIVE_URL="https://script.google.com/macros/s/PASTE_DEPLOYMENT_ID/exec"
 DRIVE_ARCHIVE_KEY="replace-with-the-same-archive-key-used-in-apps-script"
+# Google Calendar OAuth: register these as Worker variables/secrets, never commit real values.
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+GOOGLE_REDIRECT_URI="https://salang-classroom.nohlove333.workers.dev/api/calendar/callback"
+# Base64url encoding of 32 cryptographically random bytes. Keep stable; rotating requires reconnect.
+CALENDAR_TOKEN_KEY=""
