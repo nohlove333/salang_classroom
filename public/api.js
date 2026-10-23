@@ -396,7 +396,7 @@
     function scheduleReconnect() {
       clearRetry();
       if (!active || !visible()) return;
-      retryTimer = window.setTimeout(connect, retryDelay);
+      retryTimer = window.setTimeout(connect, retryDelay + Math.random() * Math.min(1000, retryDelay / 2));
       retryDelay = Math.min(30000, retryDelay * 2);
     }
     function connect() {
