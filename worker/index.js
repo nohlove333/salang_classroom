@@ -1,12 +1,11 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-20-v49';
+const RELEASE = '2026-10-23-v50';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
 let coreSchemaCheckedAt = 0;
 let schemaCheckPromise = null;
-const presenceUpdates = new Map();
 const initializedGuestRooms = new Set();
 // Only raw, server-side snapshots are shared. Every response is copied and
 // filtered for the authenticated student before it leaves this Worker.
@@ -502,8 +501,6 @@ function studentJson(row, includePin = false) {
     classId: row.class_id,
     number: Number(row.number),
     name: row.name,
-    online: Boolean(row.online),
-    lastSeenAt: row.last_seen_at || ''
   };
   if (includePin && row.pin) item.pin = row.pin;
   return item;
@@ -705,11 +702,8 @@ async function classData(env, classId, studentId = '', knownVersion = null) {
 async function readClassSnapshot(env, classId, studentId = '') {
   const classRow = await env.DB.prepare('SELECT * FROM classes WHERE id=?').bind(classId).first();
   if (!classRow) throw new AppError('클래스를 찾을 수 없습니다.', 'NOT_FOUND', 404);
-  const cutoff = new Date(Date.now() - 90000).toISOString();
   const [studentRows, contentRows, submissionRows, postRows, ideaPostRows, timerRow, attachmentMap] = await Promise.all([
-    all(env.DB.prepare(
-      'SELECT *, CASE WHEN last_seen_at>=? THEN 1 ELSE 0 END AS online FROM students WHERE class_id=? ORDER BY number'
-    ).bind(cutoff, classId)),
+    all(env.DB.prepare('SELECT * FROM students WHERE class_id=? ORDER BY number').bind(classId)),
     all(env.DB.prepare('SELECT * FROM contents WHERE class_id=? ORDER BY created_at DESC').bind(classId)),
     all(env.DB.prepare(
       studentId
@@ -773,7 +767,6 @@ async function readClassSnapshot(env, classId, studentId = '') {
     boardPosts: posts,
     ideaPosts,
     timer: timerJson(timerRow),
-    onlineStudents: students.filter((item) => item.online)
   };
 }
 
@@ -1011,9 +1004,6 @@ async function studentLogin(env, payload) {
   if (!row) throw new AppError('출석번호를 확인해 주세요.', 'STUDENT_NOT_FOUND', 404);
   const calculated = await pinHash(String(payload.pin || ''), row.pin_salt, env);
   if (!safeEqual(calculated, row.pin_hash)) throw new AppError('비밀번호가 일치하지 않습니다.', 'LOGIN_FAILED', 401);
-  const seen = nowIso();
-  await env.DB.prepare('UPDATE students SET last_seen_at=? WHERE id=?').bind(seen, row.id).run();
-  row.last_seen_at = seen;
   const token = await issueSession(env, 'student', row.id, classRow.id);
   return { token, user: studentJson(row), classInfo: classJson(classRow) };
 }
@@ -1754,18 +1744,7 @@ async function clearClassTimer(env, session, payload) {
 
 async function heartbeat(env, session, payload) {
   const classId = session.role === 'student' ? session.class_id : String(payload.classId || '');
-  if (session.role === 'student') {
-    const lastUpdate = presenceUpdates.get(session.user_id) || 0;
-    if (Date.now() - lastUpdate >= 60000) {
-      const cutoff = new Date(Date.now() - 60000).toISOString();
-      await env.DB.prepare('UPDATE students SET last_seen_at=? WHERE id=? AND class_id=? AND last_seen_at<=?')
-        .bind(nowIso(), session.user_id, classId, cutoff).run();
-      if (presenceUpdates.size >= 1000) presenceUpdates.clear();
-      presenceUpdates.set(session.user_id, Date.now());
-    }
-  } else {
-    await ownedClass(env, session, classId);
-  }
+  if (session.role !== 'student') await ownedClass(env, session, classId);
   const classRow = await env.DB.prepare('SELECT version FROM classes WHERE id=?').bind(classId).first();
   const version = Number(classRow && classRow.version || 1);
   const changed = Number(payload.knownVersion) !== version;
@@ -1778,14 +1757,6 @@ async function heartbeat(env, session, payload) {
       result.boardReviews = result.classData.boardPosts.filter((post) => post.studentId === session.user_id)
         .map((post) => ({ postId: post.id, status: post.status || 'published', updatedAt: post.updatedAt || '' }));
     }
-  }
-  if (session.role === 'teacher') {
-    const cutoff = new Date(Date.now() - 90000).toISOString();
-    const rows = await all(env.DB.prepare(
-      'SELECT *,1 AS online FROM students WHERE class_id=? AND last_seen_at>=? ORDER BY number'
-    ).bind(classId, cutoff));
-    result.onlineStudents = rows.map(studentJson);
-    if (result.classData) result.classData.onlineStudents = result.onlineStudents;
   }
   return result;
 }
