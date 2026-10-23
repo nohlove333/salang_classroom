@@ -36,6 +36,12 @@ const expiry = new Date(Date.now() + 86400000).toISOString();
 db.prepare('INSERT INTO teachers VALUES(?,?,?,?,?,?)').run('teacher-a', 'teacher@example.test', '교사', 'x', 'x', now);
 db.prepare('INSERT INTO classes(id,teacher_id,name,code,created_at,updated_at) VALUES(?,?,?,?,?,?)')
   .run('class-a', 'teacher-a', '기존 반', 'CLASS', now, now);
+db.prepare('INSERT INTO classes(id,teacher_id,name,code,created_at,updated_at) VALUES(?,?,?,?,?,?)')
+  .run('class-b', 'teacher-a', '두 번째 반', 'CLASS2', now, now);
+db.prepare('INSERT INTO contents(id,class_id,type,title,created_at,updated_at) VALUES(?,?,?,?,?,?)')
+  .run('assignment-a', 'class-a', 'assignment', '수학 과제', now, now);
+db.prepare('INSERT INTO contents(id,class_id,type,title,created_at,updated_at) VALUES(?,?,?,?,?,?)')
+  .run('assignment-b', 'class-b', 'assignment', '수학 과제', now, now);
 const rawToken = 'teacher-token';
 const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawToken))).toString('hex');
 db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run(hash, 'teacher', 'teacher-a', '', expiry, now);
@@ -55,6 +61,11 @@ async function call(action, payload = {}, token = rawToken) {
 }
 
 await call('getTeacherClass', { classId: 'class-a' });
+const bulkTargets = await call('getBulkContentTargets', { type: 'assignment', classIds: ['class-a', 'class-b'] });
+assert.equal(bulkTargets.classes.length, 2, 'teacher bulk edit targets include only selected owned classes');
+assert.equal(bulkTargets.classes.find((item) => item.id === 'class-b').contents[0].id, 'assignment-b');
+const duplicateBulkClass = await request('getBulkContentTargets', { type: 'assignment', classIds: ['class-a', 'class-a'] });
+assert.equal(duplicateBulkClass.status, 400, 'bulk target selection requires two distinct classes');
 assert.ok(db.prepare('PRAGMA table_info(class_timers)').all().some((column) => column.name === 'sound'),
   'existing timer tables receive a non-destructive sound column upgrade');
 assert.equal(sqlLog.filter((sql) => /SELECT version FROM classes/.test(sql)).length, 0,
@@ -94,6 +105,8 @@ const foreignHash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEn
 db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run(foreignHash, 'teacher', 'teacher-b', '', expiry, now);
 const forbiddenReopen = await request('reopenGuestRoom', { roomId: roomOne.id }, foreignToken);
 assert.equal(forbiddenReopen.status, 404, 'only the room owning teacher can reopen it');
+const foreignBulkTargets = await request('getBulkContentTargets', { type: 'assignment', classIds: ['class-a', 'class-b'] }, foreignToken);
+assert.equal(foreignBulkTargets.status, 403, 'a teacher cannot bulk edit another teacher classes');
 
 const reopenedRoom = await call('reopenGuestRoom', { roomId: roomOne.id, durationHours: 24 });
 assert.equal(reopenedRoom.id, roomOne.id, 'reopening updates the existing room');

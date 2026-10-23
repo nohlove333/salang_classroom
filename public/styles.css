@@ -1787,6 +1787,10 @@ video {
 .progress-meter { display: inline-block; width: 90px; height: 8px; margin-right: 7px; overflow: hidden; border-radius: 999px; background: var(--blue-soft); vertical-align: middle; }
 .progress-meter span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
 .progress-assignment > .button { margin-top: 10px; }
+.bulk-class-targets { display: grid; max-height: 260px; gap: 7px; overflow: auto; }
+.bulk-class-target { display: flex; align-items: flex-start; gap: 9px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+.bulk-class-target > span { display: grid; min-width: 0; flex: 1; gap: 6px; }
+.bulk-pinned { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; }
 
 .selected-file {
   display: flex;

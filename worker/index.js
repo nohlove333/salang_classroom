@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-23-v60';
+const RELEASE = '2026-10-23-v61';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -1644,6 +1644,30 @@ async function upsertContent(env, session, payload) {
   return result;
 }
 
+async function getBulkContentTargets(env, session, payload) {
+  const type = String(payload.type || '');
+  if (!['announcement', 'assignment', 'board', 'idea'].includes(type)) throw new AppError('잘못된 자료 유형입니다.', 'INVALID_TYPE');
+  const classIds = Array.from(new Set((Array.isArray(payload.classIds) ? payload.classIds : []).map((id) => String(id || '')).filter(Boolean)));
+  if (classIds.length < 2 || classIds.length > 50) throw new AppError('2개 이상 50개 이하의 클래스를 선택해 주세요.', 'INVALID_CLASS_COUNT');
+  const classes = await all(env.DB.prepare(
+    `SELECT id,name FROM classes WHERE teacher_id=? AND id IN (${placeholders(classIds.length)}) ORDER BY display_order,name`
+  ).bind(session.user_id, ...classIds));
+  if (classes.length !== classIds.length) throw new AppError('선택한 클래스 중 관리 권한이 없는 항목이 있습니다.', 'FORBIDDEN', 403);
+  const contents = await all(env.DB.prepare(
+    `SELECT c.id,c.class_id,c.title,c.updated_at,group_concat(a.file_id) AS attachment_ids
+     FROM contents c LEFT JOIN attachments a ON a.owner_type='content' AND a.owner_id=c.id
+     WHERE c.class_id IN (${placeholders(classIds.length)}) AND c.type=?
+     GROUP BY c.id ORDER BY c.updated_at DESC,c.title COLLATE NOCASE LIMIT 2500`
+  ).bind(...classIds, type));
+  const byClass = new Map(classes.map((item) => [item.id, { id: item.id, name: item.name, contents: [] }]));
+  for (const item of contents) {
+    const target = byClass.get(item.class_id);
+    if (target) target.contents.push({ id: item.id, title: item.title, updatedAt: item.updated_at,
+      attachmentIds: item.attachment_ids ? item.attachment_ids.split(',') : [] });
+  }
+  return { classes: classes.map((item) => byClass.get(item.id)) };
+}
+
 async function deleteContent(env, session, payload) {
   const type = String(payload.type || '');
   const row = await env.DB.prepare('SELECT * FROM contents WHERE id=? AND class_id=? AND type=?')
@@ -2305,7 +2329,7 @@ async function handleAction(request, env) {
   const teacherActions = new Set([
     'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource',
     'teacherDashboard', 'createClass', 'updateClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
-    'upsertContent', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
+    'upsertContent', 'getBulkContentTargets', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
     'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
     'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
     'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'reopenGuestRoom', 'deleteGuestRoom',
@@ -2337,6 +2361,7 @@ async function handleAction(request, env) {
       }
     case 'getStudentClass': return classData(env, session.class_id, session.user_id);
     case 'upsertContent': return upsertContent(env, session, payload);
+    case 'getBulkContentTargets': return getBulkContentTargets(env, session, payload);
     case 'deleteContent': return deleteContent(env, session, payload);
     case 'addStudents': return addStudents(env, session, payload);
     case 'reissueClassPins': return reissueClassPins(env, session, payload);

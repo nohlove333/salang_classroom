@@ -108,6 +108,7 @@
               '<a class="button secondary" href="#/teacher/resources">교사 자료방</a>' +
               '<button class="button secondary" type="button" data-logout>로그아웃</button>' +
               '<button class="button secondary" type="button" data-create-guest-room>＋ 1회성 참여방</button>' +
+              (data.classes.length > 1 ? '<button class="button secondary" type="button" data-bulk-content>여러 반에 글 쓰기</button>' : '') +
               '<button class="button" type="button" data-create-class>＋ 클래스 만들기</button>' +
             '</div>' +
           '</div>' +
@@ -129,6 +130,8 @@
       container.querySelectorAll('[data-create-guest-room]').forEach(function (button) {
         button.addEventListener('click', function () { openGuestRoomEditor(container); });
       });
+      var bulkContentButton = container.querySelector('[data-bulk-content]');
+      if (bulkContentButton) bulkContentButton.addEventListener('click', function () { openBulkContentEditor(container); });
       container.querySelector('[data-logout]').addEventListener('click', function () {
         dashboardData = null;
         classData = null;
@@ -175,6 +178,101 @@
           moveClass(button, data.classes, container);
         });
       });
+  }
+
+  function openBulkContentEditor(container) {
+    var classes = (dashboardData && dashboardData.classes || []).slice();
+    var targets = [];
+    var mode = 'create';
+    var type = 'announcement';
+    var dialog = UI.modal({
+      title: '여러 반에 글 쓰기',
+      wide: true,
+      html: '<form class="form-stack" data-bulk-content-form>' +
+        '<div class="form-row"><div class="field"><label for="bulk-content-type">글 종류</label><select id="bulk-content-type" data-bulk-type>' +
+          '<option value="announcement">공지</option><option value="assignment">과제</option><option value="board">보드</option><option value="idea">아이디어 구름</option></select></div>' +
+          '<div class="field"><label for="bulk-content-mode">작업</label><select id="bulk-content-mode" data-bulk-mode><option value="create">새 글 작성</option><option value="edit">각 반의 기존 글 일괄 수정</option></select></div></div>' +
+        '<div class="field"><span class="field-label">적용할 반 (2~12개)</span><div class="bulk-class-targets" data-bulk-targets><span class="muted-text">글 종류별 반 자료를 불러오는 중…</span></div></div>' +
+        '<div class="field"><label for="bulk-content-title">제목</label><input id="bulk-content-title" name="title" maxlength="100" required></div>' +
+        '<div class="field"><label for="bulk-content-category">카테고리</label><input id="bulk-content-category" name="category" maxlength="40"></div>' +
+        '<div class="field"><label for="bulk-content-body">내용</label><textarea id="bulk-content-body" name="body" maxlength="5000"></textarea></div>' +
+        '<div class="form-row"><div class="field"><label for="bulk-content-due">제출 마감 (과제)</label><input id="bulk-content-due" name="dueAt" type="datetime-local"></div>' +
+          '<div class="field"><label for="bulk-content-status">상태</label><select id="bulk-content-status" name="status"><option value="open">열림</option><option value="closed">마감·읽기 전용</option></select></div></div>' +
+        '<label class="bulk-pinned"><input type="checkbox" name="pinned"> 공지를 상단에 고정</label>' +
+        '<div class="field"><span class="field-label">추가 첨부파일</span><label class="file-drop" data-file-drop><input type="file" multiple data-file-input><strong>공통 파일을 선택해 반별 사본으로 첨부</strong><span>반마다 별도 파일 사본을 저장합니다.</span></label><div class="selected-files" data-selected-files></div></div>' +
+        '<div class="info-box">여러 반에 순서대로 저장합니다. 일부 반 저장에 실패하면 성공한 반과 실패한 반을 알려드리며, 이미 성공한 반은 자동 롤백하지 않습니다. 수정 시 기존 첨부파일은 유지됩니다.</div>' +
+        '<div class="modal-actions"><button class="button secondary" type="button" data-bulk-cancel>취소</button><button class="button" type="submit">선택한 반에 저장</button></div></form>'
+    });
+    var picker = UI.filePicker(dialog, []);
+    var targetsNode = dialog.querySelector('[data-bulk-targets]');
+    function paintTargets() {
+      targetsNode.innerHTML = targets.map(function (item) {
+        var options = item.contents.length ? item.contents.map(function (content) {
+          return '<option value="' + UI.attr(content.id) + '">' + UI.escape(content.title) + ' · ' + UI.escape(UI.date(content.updatedAt, true)) + '</option>';
+        }).join('') : '<option value="">수정할 기존 글 없음</option>';
+        return '<label class="bulk-class-target"><input type="checkbox" data-bulk-class value="' + UI.attr(item.id) + '"><span><strong>' + UI.escape(item.name) + '</strong>' +
+          (mode === 'edit' ? '<select data-bulk-existing ' + (!item.contents.length ? 'disabled' : '') + '>' + options + '</select>' : '') + '</span></label>';
+      }).join('');
+    }
+    async function loadTargets() {
+      type = dialog.querySelector('[data-bulk-type]').value;
+      targetsNode.innerHTML = '<span class="muted-text">반 자료를 확인하고 있어요.</span>';
+      try {
+        var result = await API.request('getBulkContentTargets', { type: type, classIds: classes.map(function (item) { return item.id; }) }, 'teacher');
+        targets = result.classes || [];
+        paintTargets();
+      } catch (error) { targetsNode.innerHTML = '<span class="error-text">' + UI.escape(error.message) + '</span>'; }
+    }
+    dialog.querySelector('[data-bulk-type]').addEventListener('change', loadTargets);
+    dialog.querySelector('[data-bulk-mode]').addEventListener('change', function (event) { mode = event.currentTarget.value; paintTargets(); });
+    targetsNode.addEventListener('change', function (event) {
+      if (event.target.matches('[data-bulk-class]')) {
+        var target = event.target.closest('.bulk-class-target').querySelector('[data-bulk-existing]');
+        if (target) target.disabled = !event.target.checked;
+      }
+    });
+    dialog.querySelector('[data-bulk-cancel]').addEventListener('click', UI.closeModal);
+    dialog.querySelector('[data-bulk-content-form]').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var selectedIds = Array.from(targetsNode.querySelectorAll('[data-bulk-class]:checked')).map(function (input) { return input.value; });
+      if (selectedIds.length < 2 || selectedIds.length > 12) { UI.toast('적용할 반을 2개 이상 12개 이하로 선택해 주세요.', 'error'); return; }
+      var rows = [];
+      for (var i = 0; i < selectedIds.length; i += 1) {
+        var targetClass = targets.find(function (item) { return item.id === selectedIds[i]; });
+        var row = { classId: targetClass.id, id: '' };
+        if (mode === 'edit') {
+          var checkbox = Array.from(targetsNode.querySelectorAll('[data-bulk-class]')).find(function (input) { return input.value === targetClass.id; });
+          var select = checkbox.closest('.bulk-class-target').querySelector('[data-bulk-existing]');
+          if (!select || !select.value) { UI.toast(targetClass.name + '에서 수정할 글을 선택해 주세요.', 'error'); return; }
+          row.id = select.value;
+          row.keepAttachmentIds = (targetClass.contents.find(function (content) { return content.id === row.id; }) || {}).attachmentIds || [];
+        }
+        rows.push(row);
+      }
+      var form = event.currentTarget;
+      var button = form.querySelector('[type="submit"]');
+      var values = new FormData(form);
+      var data = { title: String(values.get('title') || '').trim(), category: String(values.get('category') || '').trim(),
+        body: String(values.get('body') || ''), status: String(values.get('status') || 'open'), pinned: values.get('pinned') === 'on',
+        dueAt: values.get('dueAt') ? new Date(values.get('dueAt')).toISOString() : '' };
+      UI.busy(button, true, '반별로 저장 중…');
+      var succeeded = [];
+      var failed = [];
+      for (var j = 0; j < rows.length; j += 1) {
+        var target = targets.find(function (item) { return item.id === rows[j].classId; });
+        try {
+          var files = picker.files().length ? await window.LearnFiles.toPayload(picker.files()) : [];
+          await API.request('upsertContent', { classId: rows[j].classId, type: type, id: rows[j].id, data: data,
+            files: files, keepAttachmentIds: rows[j].keepAttachmentIds || [] }, 'teacher', 0);
+          succeeded.push(target.name);
+        } catch (error) { failed.push(target.name + ': ' + error.message); }
+      }
+      UI.closeModal();
+      if (succeeded.length) UI.toast(succeeded.length + '개 반에 저장했습니다.');
+      if (failed.length) UI.modal({ title: '일부 반 저장 확인', html: '<div class="error-box">' + failed.map(UI.escape).join('<br>') + '</div><p class="muted-text">완료: ' + UI.escape(succeeded.join(', ') || '없음') + '</p>' });
+      renderDashboard(container, true);
+    });
+    loadTargets();
   }
 
   var resourceItems = [];
