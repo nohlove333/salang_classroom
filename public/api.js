@@ -533,8 +533,6 @@
           number: s,
           name: s % 5 === 0 ? '김학생' + s : '학생 ' + s,
           pin: String(1000 + ((c * 97 + s * 31) % 9000)),
-          online: c === 1 && s <= 8,
-          lastSeenAt: s <= 8 ? nowIso() : ''
         });
       }
       announcements.push({
@@ -702,7 +700,6 @@
         };
       })),
       timer: clone(state.timers[classId] || null),
-      onlineStudents: clone(classStudents.filter(function (item) { return item.online; }))
     };
   }
 
@@ -1204,7 +1201,7 @@
 
       if (action === 'heartbeat') {
         var heartbeatClassId = payload.classId || (readSession('student') && readSession('student').classInfo.id);
-        return { onlineStudents: [], timer: clone(state.timers[heartbeatClassId] || null) };
+        return { timer: clone(state.timers[heartbeatClassId] || null) };
       }
 
       throw new ApiError('미리보기 모드에서 지원하지 않는 요청입니다: ' + action, 'DEMO_NOT_IMPLEMENTED');
