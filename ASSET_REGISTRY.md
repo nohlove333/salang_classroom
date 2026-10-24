@@ -23,3 +23,8 @@
 - public/categories.js: 공통 분류 트리/관리 UI.
 - public/drafts.js: 명시적 폼 초안 보호.
 - tests/archive-api.test.mjs, archive.test.mjs, categories-api.test.mjs, categories.test.mjs, drafts.test.mjs: 소유권/무결성/트리/초안 회귀 검사.
+
+## v66
+- public/operations.js: 관리자·전자칠판·참여방 타이머. public/outbox.js: 미전송 보관함. public/privacy.html: 개인정보 기능 안내.
+- public/styles.css/workspace.css: 기존 파스텔 체계의 관리 카드·스크롤 전자칠판·모바일 접기. 브랜드 이미지 변경 없음.
+- tests/operations.test.mjs/outbox.test.mjs/operations-ui.test.mjs: 격리 복원·권한·큐·컨트롤러 증거. 실제 화면 스크린샷 없음.

@@ -345,6 +345,7 @@
           result && result.details ? result.details : null
         );
       }
+      if (window.LearnOutbox && role === 'teacher') { try { await window.LearnOutbox.success(action,payload,body.token); } catch (_) {} }
       if (window.LearnDrafts) window.LearnDrafts.complete(draftCommit);
       return result.data;
     } catch (error) {
@@ -353,8 +354,9 @@
         await sleep(600 + Math.random() * 900);
         return this.request(action, payload, role, retries - 1);
       }
+      if (window.LearnOutbox && role === 'teacher' && (transient || ['SERVER_ERROR','NETWORK_ERROR','INVALID_RESPONSE'].includes(error.code))) { try { if(await window.LearnOutbox.failure(action,payload,body.token)) error.message += ' 설정의 미전송 보관함에 저장했습니다.'; } catch (queueError) { error.message += ' ' + queueError.message; } }
       if (error instanceof ApiError) throw error;
-      throw new ApiError('인터넷 연결을 확인한 뒤 다시 시도해 주세요.', 'NETWORK_ERROR');
+      throw new ApiError('인터넷 연결을 확인한 뒤 다시 시도해 주세요. '+(error.message || ''), 'NETWORK_ERROR');
     }
   };
 

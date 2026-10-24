@@ -1,0 +1,16 @@
+(function(){
+'use strict';
+const allowed=new Set(['workspaceSave','calendarEventSave','calendarEventDelete']);
+const prefix='learn-outbox-v1:';
+async function key(token){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return prefix+Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');}
+function current(){return window.LearnSession.get('teacher')?.token;}
+async function entries(token){return JSON.parse(localStorage.getItem(await key(token))||'[]');}
+async function write(token,rows){const text=JSON.stringify(rows);if(rows.length>20||text.length>1000000)throw Error('미전송 보관함이 가득 찼습니다. 설정에서 기존 항목을 확인해 주세요.');localStorage.setItem(await key(token),text);}
+async function failure(action,payload,token){if(!allowed.has(action)||!token||current()!==token)return false;const rows=await entries(token);if(current()!==token)return false;const body=JSON.stringify(payload),existing=rows.find(r=>r.action===action&&JSON.stringify(r.payload)===body);if(!existing)rows.push({id:crypto.randomUUID(),action,payload:JSON.parse(body),createdAt:Date.now()});await write(token,rows);return true;}
+async function success(action,payload,token){if(!allowed.has(action)||!token||current()!==token)return;const rows=await entries(token),body=JSON.stringify(payload);await write(token,rows.filter(r=>r.action!==action||JSON.stringify(r.payload)!==body));}
+async function open(){const token=current();if(!token)return;const rows=await entries(token);if(current()!==token)return;const ui=window.LearnUI,esc=ui.escape;const dialog=ui.modal({title:'미전송 보관함',wide:true,html:'<p>전송에 실패한 일정·업무 저장 요청입니다. 자동 재전송하지 않습니다. 서버 revision·Google ETag를 유지하므로 충돌 시 덮어쓰지 않습니다. 성공 응답이 유실된 경우에도 서버 내용을 먼저 확인하세요.</p>'+rows.map(r=>'<article class="ops-backup"><div><strong>'+esc(r.action==='workspaceSave'?'업무 저장 · '+r.payload.kind:r.action==='calendarEventDelete'?'일정 삭제':'일정 저장')+'</strong><small> '+esc(new Date(r.createdAt).toLocaleString('ko-KR'))+'</small><details><summary>전송 내용 확인</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(JSON.stringify(r.payload,null,2))+'</pre></details></div><button data-retry="'+r.id+'">이 내용 재전송</button><button data-remove="'+r.id+'">보관함에서 제거</button></article>').join('')+(rows.length?'':'<p>미전송 요청이 없습니다.</p>')+'<p role="status"></p>'});
+ dialog.onclick=async e=>{const b=e.target.closest('button[data-retry],button[data-remove]');if(!b)return;b.disabled=true;try{if(current()!==token)throw Error('계정이 바뀌었습니다. 보관함을 다시 열어 주세요.');const id=b.dataset.retry||b.dataset.remove,row=rows.find(x=>x.id===id);if(b.dataset.retry){if(!confirm('보관된 내용을 서버로 다시 전송할까요?'))return;await window.LearnAPI.request(row.action,row.payload,'teacher');}else{if(!confirm('이 미전송 요청을 기기에서 제거할까요? 서버 자료는 삭제하지 않습니다.'))return;await write(token,(await entries(token)).filter(x=>x.id!==id));}await open();}catch(e){dialog.querySelector('[role=status]').textContent=e.message+' 보관된 내용은 유지됩니다.';}finally{b.disabled=false;}};
+}
+let tail=Promise.resolve();function serial(fn){const next=tail.then(fn);tail=next.catch(()=>{});return next;}
+window.LearnOutbox={failure:(...a)=>serial(()=>failure(...a)),success:(...a)=>serial(()=>success(...a)),open};
+})();

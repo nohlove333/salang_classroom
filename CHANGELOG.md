@@ -86,3 +86,10 @@ v63 배포 후 최종 검토에서 발견한 계정 전환 중 비동기 응답 
 - 교사·학생 공통 카테고리 트리와 교사 분류 관리, 자료방 하위 경로 필터.
 - 주요 작성 폼 초안 보관, 기록별 초안, 특별 시간표 초안, 최근 클래스 정렬.
 - 5개 신규 테스트 스크립트 추가. 기존 포함 15개 통과.
+
+## 2026-10-24 v66 (통합 배포 준비)
+- worker/index.js: owner-scoped ops API, 클래스 상태, 검증된 R2 보관/새 클래스 복원, opt-in cron, 익명 선택, 참여방 타이머, 검색 필터, 관측 메타.
+- public/operations.js/outbox.js/privacy.html: 관리·전자칠판·수동 미전송 재시도·개인정보 기능 안내.
+- public/workspace.js/css: 행사/미확인 카드, 반복 선택, Google 나중 설정, 실제 모바일 메뉴 접기.
+- public/student.js/teacher.js/guest.js/ui.js/drafts.js/api.js/app.js/index.html: 기존 경로 통합·초안/내비게이션 경고·타이머·필터.
+- tests/operations.test.mjs, outbox.test.mjs, operations-ui.test.mjs 추가. 총 18개 스크립트.

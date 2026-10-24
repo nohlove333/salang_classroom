@@ -283,6 +283,7 @@
   var resourceCategories = [];
   var resourceCategoryFilter = null;
   var resourceSearch = '';
+  var resourceSearchMode='prefix',resourceFileKind='';
   var resourceTeacherToken = '';
 
   async function renderResources(container, append) {
@@ -291,7 +292,7 @@
     if (resourceTeacherToken !== session.token) {
       resourceTeacherToken = session.token;
       resourceCategoryFilter = null;
-      resourceSearch = '';
+      resourceSearch = '';resourceSearchMode='prefix';resourceFileKind='';
       resourceCategories = [];
       append = false;
     }
@@ -302,7 +303,7 @@
     if (moreButton) UI.busy(moreButton, true, '불러오는 중…');
     try {
       var data = await API.request('getTeacherResources', {
-        cursor: append ? resourceCursor : null, category: resourceCategoryFilter, search: resourceSearch, includeDescendants: true
+        cursor: append ? resourceCursor : null, category: resourceCategoryFilter, search: resourceSearch, searchMode:resourceSearchMode, fileKind:resourceFileKind, includeDescendants: true
       }, 'teacher');
       if (version !== resourceLoadVersion || location.hash !== '#/teacher/resources') return;
       resourceItems = append ? resourceItems.concat(data.items) : data.items;
@@ -336,10 +337,10 @@
           '<button class="button" type="button" data-add-resource>＋ 자료 추가</button></div></div>' +
       '<div class="panel teacher-resource-filter"><div class="field"><label for="resource-category-filter">카테고리별 보기</label>' +
         '<select id="resource-category-filter" data-resource-category-filter>' + resourceCategoryOptions() + '</select></div>' +
-        '<form class="field" data-resource-search-form><label for="resource-search">자료 제목 앞부분 검색</label>' +
+        '<form class="field" data-resource-search-form><label for="resource-search">자료 검색</label>' +
           '<div class="inline-actions"><input id="resource-search" name="search" type="search" maxlength="80" value="' + UI.attr(resourceSearch) + '" placeholder="예: 우정, 수행평가">' +
-            '<button class="button secondary" type="submit">검색</button></div></form>' +
-        '<p class="muted-text">제목 앞부분 검색과 카테고리 필터를 함께 사용할 수 있어요. %, _ 기호는 검색어로 쓸 수 없어요.</p></div>' +
+            '<select name="searchMode"><option value="prefix" '+(resourceSearchMode==='prefix'?'selected':'')+'>제목 앞부분 (빠름)</option><option value="text" '+(resourceSearchMode==='text'?'selected':'')+'>제목·설명 포함 검색</option></select><select name="fileKind">'+[['','모든 유형'],['link','링크 있음'],['image','이미지'],['video','영상'],['pdf','PDF'],['document','문서']].map(function(x){return '<option value="'+x[0]+'" '+(resourceFileKind===x[0]?'selected':'')+'>'+x[1]+'</option>';}).join('')+'</select><button class="button secondary" type="submit">검색</button></div></form>' +
+        '<p class="muted-text">분류·유형·검색을 함께 적용합니다. 설명 포함 검색은 더 많은 자료를 읽으므로 필요할 때 선택해 주세요. %, _ 기호는 검색어로 쓸 수 없어요.</p></div>' +
       (resourceItems.length ? '<div class="teacher-resource-list">' + resourceItems.map(function (item) {
         return '<article class="panel teacher-resource-card"><div class="teacher-resource-head"><h2>' + UI.escape(item.title) + '</h2>' +
           '<div class="teacher-resource-actions"><button class="button secondary small" type="button" data-edit-resource="' + UI.attr(item.id) + '">수정</button>' +
@@ -364,7 +365,8 @@
     });
     container.querySelector('[data-resource-search-form]').addEventListener('submit', function (event) {
       event.preventDefault();
-      resourceSearch = String(new FormData(event.currentTarget).get('search') || '').trim();
+      var filters=new FormData(event.currentTarget);resourceSearchMode=String(filters.get('searchMode')||'prefix');resourceFileKind=String(filters.get('fileKind')||'');
+      resourceSearch = String(filters.get('search') || '').trim();
       renderResources(container);
     });
     var more = container.querySelector('[data-more-resources]');
@@ -958,6 +960,8 @@
                 '<button class="button secondary small" type="button" data-copy-code>코드 복사</button>' +
                 '<button class="button secondary small" type="button" data-open-timer>⏱ 타이머</button>' +
                 '<button class="button secondary small" type="button" data-manage-categories>카테고리 관리</button>' +
+                '<button class="button secondary small" type="button" data-display-control>전자칠판</button>' +
+                '<a class="button secondary small" href="#/teacher/admin">마감·보관 관리</a>' +
                 '<button class="button secondary small" type="button" data-class-archive>수업 보관 파일</button>' +
                 '<button class="button small" type="button" data-refresh>새로고침</button></div>' +
             '</header>' +
@@ -998,6 +1002,7 @@
       renderClass(container, classId, tab, true);
     });
     container.querySelector('[data-manage-categories]').addEventListener('click', function () { window.LearnCategories.manage('class', classId, [...(classData.categories || []), ...['announcements','assignments','boards','ideas'].flatMap(function (k) { return classData[k].map(function (x) { return x.category; }); })], function () { renderClass(container, classId, tab, true); }); });
+    container.querySelector('[data-display-control]').addEventListener('click', function () { window.LearnOperations.controls(classId).catch(function(e){ UI.toast(e.message, 'error'); }); });
     container.querySelector('[data-class-archive]').addEventListener('click', function () { window.LearnArchive.open(classId); });
     container.querySelector('[data-open-timer]').addEventListener('click', function () {
       openTimerEditor(classId, container, tab);
@@ -2426,6 +2431,7 @@
         '<div class="workspace-title"><p class="section-kicker">One-time room</p><h1>' + UI.escape(room.title) + '</h1>' +
           '<p><span class="status-pill ' + UI.attr(room.status) + '">' + UI.escape(guestRoomStatusLabel(room)) + '</span> · ' + UI.escape(UI.date(room.expiresAt, true)) + '까지</p></div>' +
         '<div class="workspace-actions"><button class="button secondary" type="button" data-edit-room-name>이름 수정</button>' +
+          '<button class="button secondary" type="button" data-guest-timer>활동 타이머</button>' +
           '<button class="button secondary" type="button" data-room-qr>QR 크게 보기</button>' +
           '<button class="button secondary" type="button" data-copy-room>링크 복사</button>' +
           (room.status === 'open' ? '<button class="button" type="button" data-close-room>참여 마감</button>' : '<button class="button" type="button" data-reopen-room>다시 열기</button>') + '</div></div>' +
@@ -2445,6 +2451,8 @@
         paintGuestRoom(container, roomId, tab);
       });
     });
+    window.LearnOperations.guestTimer(container,guestRoomData.timer);
+    container.querySelector('[data-guest-timer]').onclick=function(){window.LearnOperations.guestTimerEditor(roomId,function(){renderGuestRoom(container,roomId,tab,true);});};
     container.querySelector('[data-room-qr]').addEventListener('click', function () { openGuestRoomQr(room.code, room.title); });
     container.querySelector('[data-copy-room]').addEventListener('click', function () { copyText(guestRoomUrl(room.code), '참여 링크를 복사했습니다.'); });
     container.querySelector('[data-refresh-room]').addEventListener('click', function () { renderGuestRoom(container, roomId, tab, true); });

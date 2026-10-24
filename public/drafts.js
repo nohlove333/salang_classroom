@@ -2,7 +2,7 @@
 'use strict';
 const prefix='learn-form-draft-v1:', TTL=7*86400000;
 const sensitive=/password|passwd|pin|token|secret|activation|setup.?key/i;
-let active=null;
+let active=null,attachSequence=0;
 function session(){const role=location.hash.startsWith('#/student')?'student':location.hash.startsWith('#/guest')?'guest':'teacher';const s=window.LearnSession.get(role);return s?.token?{role,token:s.token}:null;}
 // No raw token is persisted in the storage key; the digest is used only as a local namespace.
 async function namespace(s){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s.role+'|'+s.token));return Array.from(new Uint8Array(bytes)).map(b=>b.toString(16).padStart(2,'0')).join('');}
@@ -11,9 +11,9 @@ function capture(form){return controls(form).map(e=>({name:e.name,type:e.type,va
 function restore(form,values){const fields=controls(form);for(let i=0;i<values.length;i++){const v=values[i],e=fields[i];if(!e||e.name!==v.name||e.type!==v.type)continue;if(e.type==='checkbox'||e.type==='radio')e.checked=Boolean(v.value);else if(e.multiple&&Array.isArray(v.value))for(const o of e.options)o.selected=v.value.includes(o.value);else e.value=String(v.value??'');}}
 function put(entry){try{localStorage.setItem(entry.key,JSON.stringify({at:Date.now(),values:capture(entry.form),baseline:entry.baseline}));entry.notice.textContent='입력 내용을 이 기기에 임시 보관했습니다. 첨부파일은 다시 선택해야 합니다.';}catch{entry.notice.textContent='기기 임시 저장에 실패했습니다. 창을 닫기 전에 내용을 복사해 주세요.';}}
 async function attach(dialog,opts){
- const form=dialog.querySelector('form'),auth=session();if(!form||!auth)return;
+ const form=dialog.querySelector('form'),auth=session();if(!form||!auth)return;const seq=++attachSequence;form.learnDraftSequence=seq;
  const baseline=JSON.stringify(capture(form));const suffix=opts.key+'|'+location.hash;
- const ns=await namespace(auth);if(session()?.token!==auth.token||!dialog.isConnected)return;
+ const ns=await namespace(auth);if(session()?.token!==auth.token||!dialog.isConnected||form.learnDraftSequence!==seq)return;
  try{for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k&&k.startsWith(prefix)){let saved;try{saved=JSON.parse(localStorage.getItem(k));}catch{}if(!saved||Date.now()-saved.at>=TTL)localStorage.removeItem(k);}}}catch{}
  const key=prefix+ns+':'+suffix, notice=document.createElement('p');notice.className='field-help draft-notice';notice.setAttribute('role','status');form.prepend(notice);
  const entry={form,key,token:auth.token,baseline,notice,actions:opts.actions||[],kind:opts.kind};active=entry;

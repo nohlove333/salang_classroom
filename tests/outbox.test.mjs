@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFile} from 'node:fs/promises';
+let token='teacher-a';const store=new Map();
+const ctx=vm.createContext({window:{LearnSession:{get:()=>({token})}},crypto,TextEncoder,localStorage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v)}});
+vm.runInContext(await readFile(new URL('../public/outbox.js',import.meta.url),'utf8'),ctx);const q=ctx.window.LearnOutbox;
+assert.equal(await q.failure('deleteClass',{},token),false);
+await Promise.all([q.failure('workspaceSave',{kind:'notes',revision:1,value:'a'},token),q.failure('workspaceSave',{kind:'notes',revision:1,value:'b'},token)]);
+let rows=JSON.parse([...store.values()][0]);assert.equal(rows.length,2);
+await q.failure('workspaceSave',{kind:'notes',revision:1,value:'a'},token);assert.equal(JSON.parse([...store.values()][0]).length,2);
+await q.success('workspaceSave',{kind:'notes',revision:1,value:'a'},token);assert.equal(JSON.parse([...store.values()][0]).length,1);
+assert.ok(![...store.keys()][0].includes(token));token='teacher-b';assert.equal(await q.failure('workspaceSave',{kind:'notes',value:'cross'},'teacher-a'),false);
+await q.failure('calendarEventSave',{operationId:'stable',etag:'version1'},token);assert.equal(store.size,2);rows=JSON.parse([...store.values()][1]);assert.equal(rows[0].payload.operationId,'stable');assert.equal(rows[0].payload.etag,'version1');
+console.log('PASS: outbox preserves concurrent failed requests, deduplicates exact payloads, clears only matching success, isolates accounts, retains conflict/idempotency keys, excludes unapproved actions.');

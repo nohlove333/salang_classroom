@@ -161,6 +161,7 @@
       (activeTab === 'board' ? guestBoardToolbar(guestBoards, chosenBoard, posts) : '') +
       teacherNotice(teacherPosts, chosenBoard ? chosenBoard.id : '') + composeBox(room.status === 'open', chosenBoard) +
       '<section class="guest-feed ' + UI.attr(activeTab) + '">' + feed + '</section></section>';
+    window.LearnOperations?.guestTimer(activeContainer,roomData.timer);
     bindEvents();
     UI.bindFiles(activeContainer, 'guest');
   }

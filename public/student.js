@@ -142,7 +142,7 @@
     var classId = studentData.classInfo.id;
     var ideas = studentData.ideas || [];
     container.innerHTML =
-      '<section class="app-page">' +
+      '<section class="app-page">' + (studentData.classInfo.lifecycle && studentData.classInfo.lifecycle !== 'active' ? '<p class="lifecycle-notice">마감·보관 중인 클래스입니다. 자료는 볼 수 있으며 선생님이 재개하면 작성할 수 있어요.</p>' : '') +
         '<header class="workspace-head">' +
           '<div class="workspace-title-wrap"><div class="back-button" aria-hidden="true">' + UI.escape(session.user.number) + '</div>' +
             '<div><h1>' + UI.escape(studentData.classInfo.name) + '</h1>' +
@@ -476,7 +476,7 @@
 
   function ideaPostCard(post, index) {
     return '<article class="idea-response-card ' + (post.mine ? 'mine' : '') + '">' +
-      '<div class="idea-response-head"><div><strong>' + (post.mine ? '내 의견' : '익명 의견 ' + (index + 1)) + '</strong>' +
+      '<div class="idea-response-head"><div><strong>' + (post.mine ? '내 의견' : post.displayMode === 'named' ? UI.escape(post.studentNumber+'번 '+post.studentName) : '익명 의견 ' + (index + 1)) + '</strong>' +
         (post.groupName ? '<span class="idea-group-badge">' + UI.escape(post.groupName) + '</span>' : '<span class="idea-group-badge individual">개별</span>') +
       '</div>' + (post.mine ? '<div class="inline-actions"><button class="button ghost small" type="button" data-edit-idea-post="' + UI.attr(post.id) + '">수정</button>' +
         '<button class="text-link" type="button" data-delete-idea-post="' + UI.attr(post.id) + '">삭제</button></div>' : '') + '</div>' +
@@ -796,14 +796,16 @@
     var dialog = UI.modal({
       title: idea.title + (post ? ' · 내 의견 수정' : ' · 의견 남기기'),
       html: '<form class="form-stack" data-idea-post-form>' +
-        '<div class="info-box">친구들에게는 이름과 출석번호가 보이지 않아요. 모둠을 선택하면 같은 모둠 의견끼리 모아 볼 수 있어요.</div>' +
+        '<div class="info-box">익명은 친구에게 이름을 가립니다. 닉네임 공개를 선택하면 출석번호와 닉네임이 보입니다. 선생님은 모든 작성자를 확인할 수 있어요.</div>' +
+        '<label>표시 방식<select name="displayMode">'+[['anonymous','익명'],['named','출석번호·닉네임 공개'],['group','모둠 의견']].map(function(x){return '<option value="'+x[0]+'" '+((post?post.displayMode:'anonymous')===x[0]?'selected':'')+'>'+x[1]+'</option>';}).join('')+'</select></label>' +
         '<div class="field"><label for="idea-group">의견 구분</label><select id="idea-group" name="groupName">' + ideaGroupOptions(post ? post.groupName : '') + '</select></div>' +
         '<div class="field"><label for="idea-text">나의 의견</label><textarea id="idea-text" name="text" maxlength="100" required placeholder="100자 이내로 자유롭게 작성하세요.">' +
           UI.escape(post ? post.text : '') + '</textarea><span class="field-help">짧고 분명하게 작성해 주세요. 여러 의견을 따로 올릴 수도 있어요.</span></div>' +
         '<div class="modal-actions"><button class="button secondary" type="button" data-cancel>취소</button><button class="button" type="submit">' +
-          (post ? '수정 저장' : '익명으로 올리기') + '</button></div></form>'
+          (post ? '수정 저장' : '선택한 방식으로 올리기') + '</button></div></form>'
     });
     dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    window.LearnDrafts?.attach(dialog,{key:'idea:'+idea.id+':'+(post?post.id:'new'),actions:['upsertIdeaPost']});
     dialog.querySelector('[data-idea-post-form]').addEventListener('submit', async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -817,11 +819,12 @@
           ideaId: idea.id,
           postId: post ? post.id : '',
           groupName: String(values.get('groupName') || ''),
+          displayMode: String(values.get('displayMode') || 'anonymous'),
           text: text
         }, 'student');
         UI.closeModal();
         await refreshClassSilently();
-        UI.toast(post ? '의견을 수정했습니다.' : '익명 의견을 올렸습니다.');
+        UI.toast(post ? '의견을 수정했습니다.' : '의견을 올렸습니다.');
       } catch (error) {
         UI.toast(error.message, 'error');
         UI.busy(button, false);
@@ -854,6 +857,7 @@
     });
     var picker = UI.filePicker(dialog, submission ? submission.attachments : []);
     dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    window.LearnDrafts?.attach(dialog,{key:'submission:'+assignment.id,actions:['upsertSubmission']});
     dialog.querySelector('[data-submission-form]').addEventListener('submit', async function (event) {
       event.preventDefault();
       var form = event.currentTarget;
@@ -916,6 +920,7 @@
     });
     var picker = UI.filePicker(dialog, post ? post.attachments : []);
     dialog.querySelector('[data-cancel]').addEventListener('click', UI.closeModal);
+    window.LearnDrafts?.attach(dialog,{key:'board:'+board.id,actions:['upsertBoardPost']});
     dialog.querySelector('[data-board-form]').addEventListener('submit', async function (event) {
       event.preventDefault();
       var form = event.currentTarget;

@@ -7,7 +7,12 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api", "/api/*", "/student-login-qr.svg", "/guest-room-qr.svg"]
+    "run_worker_first": [
+      "/api",
+      "/api/*",
+      "/student-login-qr.svg",
+      "/guest-room-qr.svg"
+    ]
   },
   "d1_databases": [
     {
@@ -21,13 +26,26 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "CLASS_SYNC", "class_name": "ClassSyncHub" }
+      {
+        "name": "CLASS_SYNC",
+        "class_name": "ClassSyncHub"
+      }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ClassSyncHub"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ClassSyncHub"
+      ]
+    }
   ],
   "observability": {
     "enabled": true
+  },
+  "triggers": {
+    "crons": [
+      "0 * * * *"
+    ]
   }
 }

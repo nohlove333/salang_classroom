@@ -103,11 +103,14 @@
   }
 
   function render() {
+    window.LearnOperations?.stop();
     var parts = routeParts();
     rememberProtectedRoute(parts);
     updateHeader(parts);
     cleanupViews();
 
+    if (parts[0] === 'privacy') { location.href='./privacy.html'; return; }
+    if (parts[0] === 'teacher' && parts[1] === 'display' && parts[2]) { window.LearnOperations.display(app,parts[2]); return; }
     if (!parts.length) {
       renderLanding();
     } else if (parts[0] === 'teacher' && parts[1] === 'login') {
@@ -178,7 +181,7 @@
             : '클래스별 공지·과제·보드와 접속 중인 학생을 확인하세요.') + '</p></div>' +
         '<div class="auth-card"><h2>' + (signup ? '교사 회원가입' : '교사 로그인') + '</h2>' +
           '<p>' + (signup ? '이메일과 비밀번호를 입력해 주세요.' : '등록한 교사 계정으로 로그인하세요.') + '</p>' +
-          '<form class="form-stack" data-teacher-auth>' +
+          '<p><a href="./privacy.html" target="_blank" rel="noopener">개인정보·자료 보관 안내</a></p><form class="form-stack" data-teacher-auth>' +
             '<div class="field"><label for="teacher-email">이메일</label><input id="teacher-email" name="email" type="email" autocomplete="email" required></div>' +
             '<div class="field"><label for="teacher-password">비밀번호</label><input id="teacher-password" name="password" type="password" autocomplete="' +
               (signup ? 'new-password' : 'current-password') + '" minlength="8" required>' +

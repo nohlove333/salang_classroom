@@ -7,3 +7,6 @@ GOOGLE_CLIENT_SECRET=""
 GOOGLE_REDIRECT_URI="https://salang-classroom.nohlove333.workers.dev/api/calendar/callback"
 # Base64url encoding of 32 cryptographically random bytes. Keep stable; rotating requires reconnect.
 CALENDAR_TOKEN_KEY=""
+
+# Optional owner-only aggregate telemetry. Use the existing teacher ID; never an email guessed by the client.
+OWNER_TEACHER_ID=""

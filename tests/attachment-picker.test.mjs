@@ -14,7 +14,7 @@ const document = {
   getElementById(id) { return id === 'modal-root' ? modalRoot : toastRoot; },
   addEventListener() {}
 };
-const context = vm.createContext({ window: {}, document, URL, console, setTimeout, clearTimeout, CustomEvent });
+const context = vm.createContext({ window: {addEventListener(){}}, document, URL, console, setTimeout, clearTimeout, CustomEvent });
 vm.runInContext(await readFile(new URL('../public/ui.js', import.meta.url), 'utf8'), context);
 const input = new Element();
 const drop = new Element();

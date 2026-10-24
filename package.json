@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "node --check worker/index.js",
-    "test": "node tests/class-sync.test.mjs && node tests/teacher-resources.test.mjs && node tests/teacher-resources-ui.test.mjs && node tests/read-optimization.test.mjs && node tests/student-account.test.mjs && node tests/grouping.test.mjs && node tests/attachment-picker.test.mjs && node tests/progress.test.mjs && node tests/workspace.test.mjs && node tests/workspace-ui.test.mjs && node tests/archive-api.test.mjs && node tests/archive.test.mjs && node tests/drafts.test.mjs && node tests/categories-api.test.mjs && node tests/categories.test.mjs"
+    "test": "node tests/class-sync.test.mjs && node tests/teacher-resources.test.mjs && node tests/teacher-resources-ui.test.mjs && node tests/read-optimization.test.mjs && node tests/student-account.test.mjs && node tests/grouping.test.mjs && node tests/attachment-picker.test.mjs && node tests/progress.test.mjs && node tests/workspace.test.mjs && node tests/workspace-ui.test.mjs && node tests/archive-api.test.mjs && node tests/archive.test.mjs && node tests/drafts.test.mjs && node tests/categories-api.test.mjs && node tests/categories.test.mjs && node tests/operations.test.mjs && node tests/outbox.test.mjs && node tests/operations-ui.test.mjs"
   },
   "dependencies": {
     "qrcode-generator": "1.4.4"

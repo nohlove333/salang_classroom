@@ -168,6 +168,9 @@
     document.dispatchEvent(new CustomEvent('learn:modalclosed'));
   }
 
+  function modalDirty(){return Boolean(modalRoot.querySelector('.modal[data-dirty="true"]'));}
+  document.addEventListener('click',function(e){const link=e.target.closest&&e.target.closest('a[href]');if(link&&!link.target&&modalDirty()&&!window.confirm('작성 중인 내용이 있습니다. 다른 화면으로 이동할까요? 첨부파일은 다시 선택해야 합니다.')){e.preventDefault();e.stopImmediatePropagation();}},true);
+  window.addEventListener('beforeunload',function(e){if(modalDirty()){e.preventDefault();e.returnValue='';}});
   function openModal(options) {
     closeModal();
     var wide = options.wide ? ' wide' : '';
@@ -183,15 +186,19 @@
       '</div>';
     document.body.style.overflow = 'hidden';
     var close = modalRoot.querySelector('[data-close-modal]');
-    if (close) close.addEventListener('click', closeModal);
+    if (close) close.addEventListener('click', function(){if(!modalDirty()||window.confirm('작성 중인 내용이 있습니다. 창을 닫을까요? 첨부파일은 다시 선택해야 합니다.'))closeModal();});
     var backdrop = modalRoot.querySelector('[data-modal-backdrop]');
     if (backdrop && options.closeOnBackdrop !== false) {
       backdrop.addEventListener('click', function (event) {
-        if (event.target === backdrop) closeModal();
+        if (event.target === backdrop && (!modalDirty()||window.confirm('작성 중인 내용을 두고 창을 닫을까요?'))) closeModal();
       });
     }
     var dialog = modalRoot.querySelector('.modal');
     if (dialog) {
+      const form=dialog.querySelector('form.form-stack');
+      if(form && !form.querySelector('input[type=password]') && window.LearnDrafts){window.LearnDrafts.attach(dialog,{key:'form:'+String(options.title||'')+':'+Array.from(form.querySelectorAll('[name]')).map(x=>x.name).join(','),actions:['createClass','updateClass','addStudents','createGuestRoom','updateGuestRoom','createGuestBoard','updateGuestBoard','upsertGuestPost']});}
+      dialog.addEventListener('input', function(){dialog.dataset.dirty='true';});
+      dialog.addEventListener('change', function(){dialog.dataset.dirty='true';});
       var focusable = dialog.querySelector('input, textarea, select, button, [href]');
       if (focusable) window.setTimeout(function () { focusable.focus(); }, 20);
     }
