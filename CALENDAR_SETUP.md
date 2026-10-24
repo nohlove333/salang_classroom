@@ -50,3 +50,9 @@
 - https://developers.google.com/calendar/api/guides/sync
 - https://developers.google.com/calendar/api/guides/version-resources
 - https://developers.google.com/identity/protocols/oauth2/web-server
+
+## v68 조회 보강
+
+연결된 교사의 홈·캘린더가 열려 있을 때 60초 간격으로 증분 확인한다. 탭이 숨겨졌거나 오프라인이면 기존 LearnSync로 중지/백오프하고, 다시 보이면 확인한다. 학생 화면이나 미연결 상태에서는 조회하지 않는다. 서버는 교사/캘린더/조회기간/페이지·동기화 토큰별로 최대 15초·40항목의 메모리 캐시 및 동시 요청 병합을 사용한다. 일정 변경·재연결·연결 해제 시 해당 교사 캐시를 무효화한다. Google 이벤트를 D1에 중복 저장하지 않는다.
+
+연결된 캘린더 수 C, 각 조회 페이지 수 P일 때 보이는 화면에서 대략 C×P회/분의 Google events 요청 상한을 예상한다(캐시/병합·증분 결과에 따라 감소). 토큰 만료 재인증과 calendarList는 별도다. webhook 등록·갱신은 구현하지 않았다. Google 연결/실계정 검증은 사용자 요청에 따라 나중에 진행한다.

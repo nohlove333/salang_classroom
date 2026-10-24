@@ -197,6 +197,7 @@
 
   async function filesToPayload(files) {
     var list = Array.from(files || []);
+    window.LearnFileDrafts?.prepare(list);
     var maxEach = Number(config.maxFileSizeMb || 25) * 1024 * 1024;
     var maxTotal = Number(config.maxUploadSizeMb || 35) * 1024 * 1024;
     var oversized = list.find(function (file) { return file.size > maxEach; });

@@ -1338,6 +1338,8 @@
   }
 
   function renderStudents() {
+    var activityRows=classData.students.map(function(student){var groups=window.LearnProgress.activity(classData,student.id,false);return '<tr><td>'+UI.escape(student.number)+'번 '+UI.escape(student.name)+'</td>'+groups.map(function(g){return '<td>'+g.participated+' / '+g.total+'</td>';}).join('')+'</tr>';}).join('');
+    var activities=classData.students.length?'<details class="class-progress-fold"><summary>학생별 보드·아이디어 참여</summary><div class="table-wrap"><table class="data-table"><thead><tr><th>학생</th><th>보드 참여</th><th>아이디어 참여</th></tr></thead><tbody>'+activityRows+'</tbody></table></div></details>':'';
     var progress = window.LearnProgress.forClass(classData.assignments, classData.submissions, classData.students);
     var rows = classData.students.map(function (student) {
       return '<tr><td><strong>' + UI.escape(student.number) + '</strong></td><td>' + UI.escape(student.name) + '</td>' +
@@ -1363,7 +1365,7 @@
       (classData.students.length && classData.assignments.length
         ? '<details class="class-progress-fold"><summary>학생별 과제 진행 상황 · ' + progress.submitted + ' / ' + (progress.submitted + progress.pending) + '건 제출</summary>' +
           '<div class="table-wrap"><table class="data-table"><thead><tr><th>학생</th><th>제출</th><th>남은 과제</th><th>진행률</th></tr></thead><tbody>' + progressRows + '</tbody></table></div></details>'
-        : '');
+        : '') + activities;
   }
 
   function bindTabActions(container, classId, tab) {

@@ -26,3 +26,6 @@ assert.equal(classProgress.assignments, 3);
 assert.equal(classProgress.submitted, 3);
 assert.equal(classProgress.pending, 3);
 console.log('PASS: private student progress, teacher per-student progress, and stable aggregate counts.');
+const data={boards:[{id:'b',title:'Board',status:'open'}],ideas:[{id:'i',title:'Idea',status:'open'}],boardPosts:[{studentId:'student-a',boardId:'b',status:'revision'}],ideaPosts:[{mine:true,ideaId:'i'},{mine:false,ideaId:'i'}]};
+const activities=window.LearnProgress.activity(data,'student-a',true);assert.equal(activities[0].participated,1);assert.equal(activities[0].entries[0].revision,true);assert.equal(activities[1].participated,1);assert.equal(window.LearnProgress.activity(data,'student-b',false)[0].participated,0);assert.equal(window.LearnProgress.activity(data,'student-b',false)[1].participated,0);
+console.log('PASS: board review and anonymous own-idea progress reuse snapshots without attributing classmates or adding requests.');

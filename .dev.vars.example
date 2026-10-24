@@ -10,3 +10,8 @@ CALENDAR_TOKEN_KEY=""
 
 # Optional owner-only aggregate telemetry. Use the existing teacher ID; never an email guessed by the client.
 OWNER_TEACHER_ID=""
+
+# Optional Cloudflare account analytics (owner opens the panel; no background polling).
+CF_ANALYTICS_ACCOUNT_ID=""
+# Analytics Read API token for that account. Store as Worker secret, never in the browser.
+CF_ANALYTICS_TOKEN=""

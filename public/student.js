@@ -234,7 +234,8 @@
 
   function renderStudentProgress(session) {
     var progress = window.LearnProgress.forStudent(studentData.assignments, studentData.submissions, session.user.id);
-    if (!progress.total) return '<div class="content-head"><div><h2>나의 수업 진행</h2><p>과제가 등록되면 제출 여부를 여기서 확인할 수 있어요.</p></div></div>' +
+    var activity=window.LearnProgress.activity(studentData,session.user.id,true).filter(function(g){return g.total;}).map(function(g){return '<section class="item-card"><h3>'+g.label+' · '+g.participated+' / '+g.total+'개 참여</h3>'+g.entries.map(function(e){return '<p>'+UI.escape(e.title)+' · '+(e.revision?'수정 요청':e.participated?'참여 완료':e.closed?'마감 · 미참여':'참여 대기')+'</p>';}).join('')+'<a class="button secondary small" href="#/student/class/'+g.kind+'">'+g.label+' 열기</a></section>';}).join('');
+    if (!progress.total) return activity + '<div class="content-head"><div><h2>나의 수업 진행</h2><p>과제가 등록되면 제출 여부를 여기서 확인할 수 있어요.</p></div></div>' +
       UI.empty('아직 등록된 과제가 없어요', '선생님이 과제를 올리면 진행 상황에 표시됩니다.');
     var entries = progress.entries.map(function (entry) {
       var assignment = entry.assignment;
@@ -251,7 +252,7 @@
       '<section class="progress-summary" aria-label="과제 진행 요약"><strong>' + progress.submitted + ' / ' + progress.total + '개 제출</strong>' +
       '<div class="storage-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + progress.percent + '"><span style="width:' + progress.percent + '%"></span></div>' +
       '<small>제출 대기 ' + progress.pending + '개 · 전체 진행률 ' + progress.percent + '%</small></section>' +
-      '<div class="item-list">' + entries + '</div>';
+      '<div class="item-list">' + entries + activity + '</div>';
   }
 
   function contentCategory(item) {

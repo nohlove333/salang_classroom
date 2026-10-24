@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-24-v67';
+const RELEASE = '2026-10-25-v68';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -2670,7 +2670,7 @@ async function calendarCallback(request,env) {
   const r=await fetch('https://oauth2.googleapis.com/token',{method:'POST',body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,redirect_uri:env.GOOGLE_REDIRECT_URI,code:u.searchParams.get('code')||'',code_verifier:row.verifier,grant_type:'authorization_code'})});
   if(!r.ok) throw new AppError('Google 연결을 완료하지 못했습니다. 다시 시도해 주세요.','OAUTH_EXCHANGE',400);
   const t=await r.json(); if(!t.refresh_token) throw new AppError('오프라인 접근 동의가 필요합니다. 다시 연결해 주세요.','OAUTH_REFRESH',400);
-  await saveGoogleToken(env,row.teacher_id,{...t,expires:Date.now()+t.expires_in*1000});
+  await saveGoogleToken(env,row.teacher_id,{...t,expires:Date.now()+t.expires_in*1000});invalidateCalendarCache(row.teacher_id);
   return new Response(null,{status:303,headers:{Location:new URL('/#/teacher/calendar',u).href,'Set-Cookie':'learn_oauth=; Path=/api/calendar; HttpOnly; Secure; SameSite=Lax; Max-Age=0','Cache-Control':'no-store'}});
 }
 async function workspaceAction(request,env,session,action,p) {
@@ -2712,6 +2712,7 @@ async function workspaceAction(request,env,session,action,p) {
     return {url:u.href,state};
   }
   if(action==='calendarDisconnect') {
+    invalidateCalendarCache(owner);
     const row=await env.DB.prepare('SELECT encrypted FROM calendar_connections WHERE teacher_id=?').bind(owner).first();
     let revoked=false;
     if(row) { const t=await tokenCipher(env,row.encrypted,true,owner); try { revoked=(await fetch('https://oauth2.googleapis.com/revoke',{method:'POST',body:new URLSearchParams({token:t.refresh_token||t.access_token})})).ok; } catch {} }
@@ -2725,10 +2726,11 @@ async function workspaceAction(request,env,session,action,p) {
     if(p.syncToken) q.set('syncToken',p.syncToken);
     else { const start=Date.parse(p.start),end=Date.parse(p.end); if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start||end-start>100*86400000) throw new AppError('조회 기간은 100일 이내로 선택해 주세요.','INVALID'); q.set('timeMin',new Date(start).toISOString()); q.set('timeMax',new Date(end).toISOString()); }
     if(p.pageToken) q.set('pageToken',p.pageToken);
-    return googleRequest(env,owner,base+'?'+q);
+    return cachedCalendarEvents(env,owner,base+'?'+q);
   }
   if(action==='calendarEventGet') return googleRequest(env,owner,base+'/'+encodeURIComponent(p.id));
   if(action==='calendarEventSave' || action==='calendarEventDelete') {
+    invalidateCalendarCache(owner);
     if(p.id && !p.etag) throw new AppError('최신 일정 버전이 필요합니다.','ETAG_REQUIRED',409);
     if(action==='calendarEventDelete') { if(!p.id) throw new AppError('일정을 선택해 주세요.','INVALID'); return googleRequest(env,owner,base+'/'+encodeURIComponent(p.id),{method:'DELETE',headers:{'If-Match':p.etag}}); }
     const e=p.event||{}; if(!String(e.summary||'').trim()||!e.start||!e.end) throw new AppError('제목과 날짜를 입력해 주세요.','INVALID');
@@ -2817,6 +2819,10 @@ CREATE INDEX IF NOT EXISTS operations_due ON class_operations(backup_enabled,nex
 CREATE TABLE IF NOT EXISTS class_backups(id TEXT PRIMARY KEY,teacher_id TEXT NOT NULL,class_id TEXT NOT NULL,created_at TEXT NOT NULL,r2_key TEXT NOT NULL,checksum TEXT NOT NULL,bytes INTEGER NOT NULL,restored_class_id TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS backups_owner_class ON class_backups(teacher_id,class_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS guest_timers(class_id TEXT PRIMARY KEY,title TEXT NOT NULL,sound TEXT NOT NULL,started_at TEXT NOT NULL,ends_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS backup_jobs(id TEXT PRIMARY KEY,teacher_id TEXT NOT NULL,class_id TEXT NOT NULL,kind TEXT NOT NULL,source_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',cursor INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL,state TEXT NOT NULL,lease_until INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS backup_jobs_due ON backup_jobs(kind,status,error,created_at);
+CREATE INDEX IF NOT EXISTS backup_jobs_owner ON backup_jobs(teacher_id,status,created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS backup_jobs_source ON backup_jobs(teacher_id,kind,source_id) WHERE status IN ('pending','cleaning');
 CREATE TABLE IF NOT EXISTS restore_claims(backup_id TEXT PRIMARY KEY,class_id TEXT NOT NULL,valid INTEGER NOT NULL DEFAULT 1 CHECK(valid=1));`;
 let operationsReady;
 async function ensureOperations(env) {
@@ -2841,17 +2847,19 @@ async function operationsAction(request,env,session,action,p) {
     else{const seconds=Number(p.seconds);if(!Number.isInteger(seconds)||seconds<10||seconds>7200)throw new AppError('10초~120분을 입력해 주세요.','INVALID');const sound=['bell','chime','woodblock','ascending'].includes(p.sound)?p.sound:'bell',time=nowIso();await env.DB.prepare('INSERT INTO guest_timers VALUES(?,?,?,?,?,?) ON CONFLICT(class_id) DO UPDATE SET title=excluded.title,sound=excluded.sound,started_at=excluded.started_at,ends_at=excluded.ends_at,updated_at=excluded.updated_at').bind(room.id,String(p.title||'활동 시간').slice(0,50),sound,time,new Date(Date.now()+seconds*1000).toISOString(),time).run();}
     await touchGuestRoom(env,room.id);return {saved:true};
   }
+  if(action==='opsCloudUsage') return cloudUsage(env,session);
   if(action==='opsOverview') {
     const classes=await all(env.DB.prepare("SELECT c.id,c.name,COALESCE(o.status,'active') status,COALESCE(o.backup_enabled,0) backup_enabled,o.next_backup,o.last_backup,o.last_error FROM classes c LEFT JOIN class_operations o ON o.class_id=c.id WHERE c.teacher_id=? ORDER BY c.display_order").bind(session.user_id));
     const backups=await all(env.DB.prepare('SELECT id,class_id,created_at,bytes,restored_class_id FROM class_backups WHERE teacher_id=? ORDER BY created_at DESC LIMIT 100').bind(session.user_id));
-    return {classes,backups,automaticDeletion:false,role:env.OWNER_TEACHER_ID===session.user_id?'owner':'teacher',metrics:env.OWNER_TEACHER_ID===session.user_id?{scope:'현재 Worker 인스턴스의 all/run/batch 결과 합계. first 조회·다른 인스턴스 제외. 계정 전체 사용량 아님',...d1Telemetry}:null,storage:await fileStorageStatus(env)};
+    const jobs=await all(env.DB.prepare("SELECT id,class_id,kind,status,cursor,total,error,created_at FROM backup_jobs WHERE teacher_id=? AND status IN ('pending','cleaning') ORDER BY created_at DESC LIMIT 30").bind(session.user_id));
+    return {classes,backups,jobs,cloudConfigured:!!(env.CF_ANALYTICS_ACCOUNT_ID&&env.CF_ANALYTICS_TOKEN),automaticDeletion:false,role:env.OWNER_TEACHER_ID===session.user_id?'owner':'teacher',metrics:env.OWNER_TEACHER_ID===session.user_id?{scope:'현재 Worker 인스턴스의 all/run/batch 결과 합계. first 조회·다른 인스턴스 제외. 계정 전체 사용량 아님',...d1Telemetry}:null,storage:await fileStorageStatus(env)};
   }
   if(action==='opsDisplayGet') {
     await ownedClass(env,session,p.classId);
     const row=await env.DB.prepare('SELECT display FROM class_operations WHERE class_id=?').bind(p.classId).first();
     const data=await classData(env,p.classId);
     const display=JSON.parse(row?.display||'{}');
-    return {display,className:data.classInfo.name,timer:data.timer,boards:data.boards.map(x=>({id:x.id,title:x.title})),posts:data.boardPosts.filter(x=>['published','confirmed'].includes(x.status)).map(x=>({id:x.id,boardId:x.boardId,title:x.title,text:x.text})),announcements:data.announcements.map(x=>({id:x.id,title:x.title,body:x.body}))};
+    return {display,className:data.classInfo.name,timer:data.timer,boards:data.boards.map(x=>({id:x.id,title:x.title})),posts:data.boardPosts.filter(x=>['published','confirmed'].includes(x.status)).map(x=>({id:x.id,boardId:x.boardId,title:x.title,text:x.text,attachments:x.attachments||[]})),announcements:data.announcements.map(x=>({id:x.id,title:x.title,body:x.body,attachments:x.attachments||[]}))};
   }
   if(action==='opsDisplaySet') {
     await operationRow(env,session,p.classId);
@@ -2873,34 +2881,39 @@ async function operationsAction(request,env,session,action,p) {
     await env.DB.prepare("UPDATE class_operations SET backup_enabled=?,next_backup=?,last_error='' WHERE class_id=? AND teacher_id=?").bind(p.enabled?1:0,Date.now()+7*86400000,p.classId,session.user_id).run();
     return {enabled:!!p.enabled,intervalDays:7};
   }
+  if(action==='opsBackupStart') {await operationRow(env,session,p.classId);const old=await pendingJob(env,session,'backup',p.classId);return old?jobResult(old):createClassBackup(env,session,p.classId,true);}
+  if(action==='opsRestoreStart')return startRestoreJob(env,session,p);
+  if(action==='opsVerifyStart')return startRestoreJob(env,session,p,'verify');
+  if(action==='opsJobStep')return stepBackupJob(env,session,p.jobId);
+  if(action==='opsJobCancel'){const job=await ownedJob(env,session,p.jobId);if(job.status==='done')return jobResult(job);await env.DB.prepare("UPDATE backup_jobs SET status='cleaning',cursor=0 WHERE id=? AND lease_until<?").bind(job.id,Date.now()).run();return stepBackupJob(env,session,job.id);}
   if(action==='opsBackupNow') {await operationRow(env,session,p.classId);return createClassBackup(env,session,p.classId);}
-  if(action==='opsBackupVerify') {const {pack,row}=await verifiedBackup(env,session,p.backupId);return {verified:true,createdAt:row.created_at,counts:Object.fromEntries(Object.entries(pack.tables).map(([k,v])=>[k,v.length])),files:pack.files.length};}
+  if(action==='opsBackupVerify') {const initial=await verifiedBackup(env,session,p.backupId,true);if(initial.pack.files.length>5)return startRestoreJob(env,session,p,'verify');const {pack,row}=await verifiedBackup(env,session,p.backupId);return {verified:true,createdAt:row.created_at,counts:Object.fromEntries(Object.entries(pack.tables).map(([k,v])=>[k,v.length])),files:pack.files.length};}
   if(action==='opsBackupRestore')return restoreClassBackup(env,session,p);
   throw new AppError('지원하지 않는 관리 요청입니다.','INVALID');
 }
 const backupTables=['students','contents','submissions','board_posts','idea_posts'];
-async function createClassBackup(env,session,id) {
-  const cls=await ownedClass(env,session,id);await ensureOperations(env);await ensureWorkspace(env);await ensureCategorySchema(env);
+async function createClassBackup(env,session,id,staged=false) {
+  const cls=await ownedClass(env,session,id);await ensureOperations(env);
+  const pending=await pendingJob(env,session,'backup',id);if(pending)throw new AppError('진행 중인 보관을 먼저 이어가거나 정리해 주세요.','BACKUP_BUSY',409);await ensureWorkspace(env);await ensureCategorySchema(env);
   const lock=await env.DB.prepare('UPDATE class_operations SET lease_until=? WHERE class_id=? AND teacher_id=? AND lease_until<? RETURNING class_id').bind(Date.now()+600000,id,session.user_id,Date.now()).first();
   if(!lock)throw new AppError('이미 보관 작업 중입니다. 잠시 후 다시 확인해 주세요.','BACKUP_BUSY',409);
   const copied=[];let manifestKey='',commitAttempted=false;
   try {
     const count=await env.DB.prepare('SELECT COUNT(*) n FROM class_backups WHERE teacher_id=? AND class_id=?').bind(session.user_id,id).first();
     if(count.n>=3)throw new AppError('클래스별 서버 보관본 3개에 도달했습니다. 기존 보관본은 자동 삭제하지 않습니다. 정기 보관을 끄거나 HTML로 보관해 주세요.','BACKUP_CAP');
-    const results=await env.DB.batch(backupTables.map(t=>env.DB.prepare(`SELECT * FROM ${t} WHERE class_id=? LIMIT 501`).bind(id)));
+    const results=await env.DB.batch(backupTables.map(t=>env.DB.prepare(`SELECT * FROM ${t} WHERE class_id=? LIMIT ${staged?5001:501}`).bind(id)));
     const tables=Object.fromEntries(backupTables.map((t,i)=>[t,results[i].results||[]]));
-    if(Object.values(tables).some(rows=>rows.length>1000)||Object.values(tables).reduce((n,rows)=>n+rows.length,0)>500)throw new AppError('큰 클래스는 현재 서버 보관 한도를 넘습니다. 수업 HTML 보관을 이용해 주세요.','BACKUP_CAP');
+    if(Object.values(tables).reduce((n,rows)=>n+rows.length,0)>(staged?5000:500))throw new AppError('큰 클래스는 현재 서버 보관 한도를 넘습니다. 수업 HTML 보관을 이용해 주세요.','BACKUP_CAP');
     // Credentials and sessions are never copied; restored students must be reissued a PIN.
     tables.students=tables.students.map(({pin_hash,pin_salt,password_hash,password_salt,...r})=>r);
-    const owners=[...tables.contents,...tables.submissions,...tables.board_posts,...tables.idea_posts].map(r=>r.id);
-    const attachments=[];
-    for(let i=0;i<owners.length;i+=80)attachments.push(...await all(env.DB.prepare(`SELECT * FROM attachments WHERE owner_id IN (${placeholders(owners.slice(i,i+80).length)})`).bind(...owners.slice(i,i+80))));
+    const ownerSql="SELECT id FROM contents WHERE class_id=? UNION ALL SELECT id FROM submissions WHERE class_id=? UNION ALL SELECT id FROM board_posts WHERE class_id=? UNION ALL SELECT id FROM idea_posts WHERE class_id=?";
+    const attachments=await all(env.DB.prepare(`SELECT * FROM attachments WHERE owner_id IN (${ownerSql}) LIMIT 1001`).bind(id,id,id,id));
     const ids=[...new Set(attachments.map(a=>a.file_id))];
-    if(ids.length>5)throw new AppError('무료 실행량 보호를 위해 서버 보관은 첨부 5개 이하를 지원합니다. 전체 첨부는 수업 HTML 보관을 이용해 주세요.','BACKUP_CAP');
-    const files=ids.length?await all(env.DB.prepare(`SELECT * FROM files WHERE id IN (${placeholders(ids.length)})`).bind(...ids)):[];
+    if(attachments.length>1000||ids.length>(staged?200:5))throw new AppError('서버 보관 첨부 한도(단계 보관 200개)를 초과했습니다. 수업 HTML 보관을 이용해 주세요.','BACKUP_CAP');
+    const files=ids.length?await all(env.DB.prepare('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids))):[];
     if(files.length!==ids.length)throw new AppError('첨부 메타데이터가 누락되어 보관을 중단했습니다.','BACKUP_MISSING');
     const backupId=uid('backup');let bytes=0;
-    for(const f of files){const source=await env.FILES.get(f.r2_key);if(!source?.body)throw new AppError('첨부 원본을 찾지 못했습니다.','BACKUP_MISSING');const target=`backups/${session.user_id}/${backupId}/${f.id}`;const written=await env.FILES.put(target,source.body);copied.push(target);if(!written||written.size!==source.size||written.etag!==source.etag)throw new AppError('첨부 복사 검증에 실패했습니다.','BACKUP_INTEGRITY');f.backup_key=target;f.backup_etag=written.etag;bytes+=written.size;}
+    if(!staged)for(const f of files){const source=await env.FILES.get(f.r2_key);if(!source?.body)throw new AppError('첨부 원본을 찾지 못했습니다.','BACKUP_MISSING');const target=`backups/${session.user_id}/${backupId}/${f.id}`;const written=await env.FILES.put(target,source.body);copied.push(target);if(!written||written.size!==source.size||written.etag!==source.etag)throw new AppError('첨부 복사 검증에 실패했습니다.','BACKUP_INTEGRITY');f.backup_key=target;f.backup_etag=written.etag;bytes+=written.size;}
     const rec=await env.DB.prepare("SELECT value,revision FROM teacher_workspace WHERE teacher_id=? AND kind='records'").bind(session.user_id).first();
     const reactions=await all(env.DB.prepare('SELECT r.* FROM board_post_reactions r JOIN board_posts p ON p.id=r.post_id WHERE p.class_id=? LIMIT 501').bind(id));
     if(reactions.length>500)throw new AppError('공감 내역이 보관 한도를 초과합니다.','BACKUP_CAP');
@@ -2909,29 +2922,40 @@ async function createClassBackup(env,session,id) {
     const pack={reactions,driveArchives,format:'learn-server-backup',schema:1,owner:session.user_id,classInfo:{name:cls.name,subject:cls.subject,school:cls.school},sourceClassId:id,tables,attachments,files,categories:await categoryLabels(env,session.user_id,'class:'+id),records:JSON.parse(rec?.value||'[]').filter(x=>x.classId===id),createdAt:nowIso()};
     const current=await ownedClass(env,session,id);
     if(current.version!==cls.version)throw new AppError('수업 자료가 변경되어 보관을 중단했습니다. 다시 시도해 주세요.','BACKUP_CHANGED',409);
-    const jsonText=JSON.stringify(pack);if(new TextEncoder().encode(jsonText).length>1500000)throw new AppError('보관 문서 한도를 초과했습니다.','BACKUP_CAP');
-    const checksum=await sha256(jsonText);manifestKey=`backups/${session.user_id}/${backupId}/manifest.json`;await env.FILES.put(manifestKey,jsonText,{httpMetadata:{contentType:'application/json'}});copied.push(manifestKey);
+    const jsonText=JSON.stringify(pack);if(new TextEncoder().encode(jsonText).length>(staged?8000000:1500000))throw new AppError('보관 문서 한도를 초과했습니다.','BACKUP_CAP');
+    const checksum=await sha256(jsonText);
+    if(staged){
+      const packKey=`backup-jobs/${session.user_id}/${backupId}/snapshot.json`;
+      await env.FILES.put(packKey,jsonText);copied.push(packKey);
+      const check=await env.FILES.get(packKey);if(!check||await sha256(await check.text())!==checksum)throw new AppError('작업 원본 검사 실패','BACKUP_INTEGRITY');
+      commitAttempted=true;
+      await env.DB.prepare('INSERT INTO backup_jobs(id,teacher_id,class_id,kind,source_id,total,state,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(backupId,session.user_id,id,'backup',id,files.length,JSON.stringify({packKey,checksum,sourceVersion:cls.version,bytes:0,etags:[]}),pack.createdAt).run();
+      return {jobId:backupId,status:'pending',cursor:0,total:files.length,kind:'backup'};
+    }
+    manifestKey=`backups/${session.user_id}/${backupId}/manifest.json`;await env.FILES.put(manifestKey,jsonText,{httpMetadata:{contentType:'application/json'}});copied.push(manifestKey);
     const check=await env.FILES.get(manifestKey);if(!check||await sha256(await check.text())!==checksum)throw new AppError('보관본 재읽기 검증에 실패했습니다.','BACKUP_INTEGRITY');
     commitAttempted=true;
     await env.DB.batch([env.DB.prepare('INSERT INTO class_backups(id,teacher_id,class_id,created_at,r2_key,checksum,bytes) VALUES(?,?,?,?,?,?,?)').bind(backupId,session.user_id,id,pack.createdAt,manifestKey,checksum,bytes+new TextEncoder().encode(jsonText).length),env.DB.prepare("UPDATE class_operations SET last_backup=?,last_error='',next_backup=?,lease_until=0 WHERE class_id=?").bind(pack.createdAt,Date.now()+7*86400000,id)]);
     invalidateFileStorageStatus();return {id:backupId,verified:true,files:files.length};
   }catch(e){if(!commitAttempted)for(const key of copied)try{await env.FILES.delete(key);}catch{}await env.DB.prepare('UPDATE class_operations SET last_error=?,next_backup=?,lease_until=0,backup_enabled=CASE WHEN ?=1 THEN 0 ELSE backup_enabled END WHERE class_id=?').bind(String(e.message).slice(0,300)+(e.code==='BACKUP_CAP'?' (정기 보관 자동 중지)':''),Date.now()+86400000,e.code==='BACKUP_CAP'?1:0,id).run();throw e;}
 }
-async function verifiedBackup(env,session,id) {
+async function verifiedBackup(env,session,id,skipFiles=false) {
   const row=await env.DB.prepare('SELECT * FROM class_backups WHERE id=? AND teacher_id=?').bind(String(id||''),session.user_id).first();if(!row)throw new AppError('보관본을 찾을 수 없습니다.','NOT_FOUND',404);
   const obj=await env.FILES.get(row.r2_key);if(!obj)throw new AppError('보관 파일이 없습니다.','BACKUP_MISSING');const text=await obj.text();if(await sha256(text)!==row.checksum)throw new AppError('보관 파일이 손상되었습니다.','BACKUP_INTEGRITY');
   const pack=JSON.parse(text);if(pack.format!=='learn-server-backup'||pack.schema!==1||pack.owner!==session.user_id)throw new AppError('보관 형식 또는 소유자가 일치하지 않습니다.','BACKUP_INTEGRITY');
-  for(const file of pack.files){const f=await env.FILES.head(file.backup_key);if(!f||f.etag!==file.backup_etag||f.size!==file.size)throw new AppError('보관 첨부가 누락되거나 변경되었습니다.','BACKUP_INTEGRITY');}
+  if(!skipFiles)for(const file of pack.files){const f=await env.FILES.head(file.backup_key);if(!f||f.etag!==file.backup_etag||f.size!==file.size)throw new AppError('보관 첨부가 누락되거나 변경되었습니다.','BACKUP_INTEGRITY');}
   return {pack,row};
 }
-async function restoreClassBackup(env,session,p) {
-  const {pack,row}=await verifiedBackup(env,session,p.backupId);
+async function restoreClassBackup(env,session,p,jobPlan=null) {
+  const {pack,row}=await verifiedBackup(env,session,p.backupId,true);
+  if(!jobPlan&&pack.files.length>5)return startRestoreJob(env,session,p);
+  if(!jobPlan)await verifiedBackup(env,session,p.backupId);
   if(row.restored_class_id)return {classId:row.restored_class_id,reused:true};
   const name=String(p.name||'').trim().slice(0,40);if(!name)throw new AppError('복원할 새 클래스 이름을 입력해 주세요.','INVALID');
   await ensureStudentCredentialSchema(env);await ensureWorkspace(env);
-  const classId=uid('class'),code=randomRoomCode(),maps=new Map(),statements=[],inserts=new Map(),created=nowIso();
-  for(const rows of Object.values(pack.tables))for(const r of rows)maps.set(r.id,uid('restored'));
-  for(const f of pack.files)maps.set(f.id,uid('file'));
+  const classId=jobPlan?.classId||uid('class'),code=jobPlan?.code||randomRoomCode(),maps=new Map(jobPlan?.maps||[]),statements=[],inserts=new Map(),created=nowIso();
+  for(const rows of Object.values(pack.tables))for(const r of rows)maps.has(r.id)||maps.set(r.id,uid('restored'));
+  for(const f of pack.files)maps.has(f.id)||maps.set(f.id,uid('file'));
   function insert(table,r){if(!inserts.has(table))inserts.set(table,[]);inserts.get(table).push(r);}
   insert('classes',{id:classId,teacher_id:session.user_id,name,subject:pack.classInfo.subject||'',school:pack.classInfo.school||'',code,student_count:pack.tables.students.length,created_at:created,updated_at:created});
   for(const t of backupTables){for(const original of pack.tables[t]){const r={...original,id:maps.get(original.id),class_id:classId};for(const k of ['student_id','assignment_id','board_id','idea_id'])if(r[k]){if(!maps.has(r[k]))throw new AppError('보관 관계가 손상되었습니다.','BACKUP_INTEGRITY');r[k]=maps.get(r[k]);}if(t==='students'){r.pin_salt=randomToken();r.pin_hash=await pinHash(randomToken(),r.pin_salt,env);r.password_hash='';r.password_salt='';r.last_seen_at='';}insert(t,r);}}
@@ -2950,9 +2974,10 @@ async function restoreClassBackup(env,session,p) {
   statements.push(env.DB.prepare("INSERT INTO teacher_workspace(teacher_id,kind,value,revision) VALUES(?,'records',?,1) ON CONFLICT(teacher_id,kind) DO UPDATE SET value=excluded.value,revision=teacher_workspace.revision+1").bind(session.user_id,recordsJson));
   // Race guard: a concurrent restoration fails the entire transaction instead of creating a duplicate.
   statements.unshift(env.DB.prepare("UPDATE class_backups SET restored_class_id=? WHERE id=? AND teacher_id=? AND restored_class_id='' RETURNING id").bind(classId,row.id,session.user_id));
-  for(const [table,rows] of inserts){const keys=Object.keys(rows[0]);statements.push(env.DB.prepare(`INSERT INTO ${table}(${keys.join(',')}) SELECT ${keys.map(k=>"json_extract(value,'$."+k+"')").join(',')} FROM json_each(?)`).bind(JSON.stringify(rows)));}
+  for(const [table,rows] of inserts){const keys=Object.keys(rows[0]);let chunk=[],size=2;const flush=()=>{if(chunk.length)statements.push(env.DB.prepare(`INSERT INTO ${table}(${keys.join(',')}) SELECT ${keys.map(k=>"json_extract(value,'$."+k+"')").join(',')} FROM json_each(?)`).bind(JSON.stringify(chunk)));chunk=[];size=2;};for(const r of rows){const n=new TextEncoder().encode(JSON.stringify(r)).length+1;if(n>900000)throw new AppError('단일 자료가 복원 한도를 초과합니다.','BACKUP_CAP');if(size+n>900000)flush();chunk.push(r);size+=n;}flush();}
+  if(statements.length>40)throw new AppError('복원 문서 한도를 초과합니다.','BACKUP_CAP');
   const copies=[];let restoreCommitAttempted=false;
-  try{for(const f of pack.files){const source=await env.FILES.get(f.backup_key);const key=`restored/${classId}/${maps.get(f.id)}`;const result=await env.FILES.put(key,source.body);copies.push(key);if(result?.etag!==f.backup_etag)throw new AppError('복원 파일 확인에 실패했습니다.','BACKUP_INTEGRITY');}
+  try{if(!jobPlan)for(const f of pack.files){const source=await env.FILES.get(f.backup_key);const key=`restored/${classId}/${maps.get(f.id)}`;const result=await env.FILES.put(key,source.body);copies.push(key);if(result?.etag!==f.backup_etag)throw new AppError('복원 파일 확인에 실패했습니다.','BACKUP_INTEGRITY');}
     // Unique source-backup claim is enforced within the same D1 batch.
     restoreCommitAttempted=true;await env.DB.batch(statements);
   }catch(e){if(!restoreCommitAttempted)for(const k of copies)try{await env.FILES.delete(k);}catch{}throw e;}
@@ -2960,8 +2985,10 @@ async function restoreClassBackup(env,session,p) {
 }
 async function runScheduledBackups(env) {
   if(!await schemaReady(env))return;await ensureOperations(env);
+  const job=await env.DB.prepare("SELECT * FROM backup_jobs WHERE kind='backup' AND status IN ('pending','cleaning') AND lease_until<? AND error='' ORDER BY created_at LIMIT 1").bind(Date.now()).first();
+  if(job){try{await stepBackupJob(env,{user_id:job.teacher_id,role:'teacher'},job.id);}catch(e){console.error('Backup step failed',job.id,e.code||'ERROR');}return;}
   const due=await all(env.DB.prepare('SELECT class_id,teacher_id FROM class_operations WHERE backup_enabled=1 AND next_backup<=? AND lease_until<? ORDER BY next_backup LIMIT 1').bind(Date.now(),Date.now()));
-  for(const r of due){try{await createClassBackup(env,{user_id:r.teacher_id,role:'teacher'},r.class_id);}catch(e){console.error('Scheduled class backup failed',r.class_id,e.code||'ERROR');}}
+  for(const r of due){try{const session={user_id:r.teacher_id,role:'teacher'},j=await createClassBackup(env,session,r.class_id,true);await stepBackupJob(env,session,j.jobId);}catch(e){console.error('Scheduled class backup failed',r.class_id,e.code||'ERROR');}}
 }
 
 // D1 result metadata only; does not write counters back into D1 or retain SQL/student data.
@@ -2971,4 +2998,127 @@ function instrumentD1(db){
  const originals=new WeakMap();
  const wrap=s=>{const proxy=new Proxy(s,{get(t,k){if(k==='bind')return(...a)=>wrap(t.bind(...a));if(k==='all'||k==='run')return async(...a)=>record(await t[k](...a));const v=t[k];return typeof v==='function'?v.bind(t):v;}});originals.set(proxy,s);return proxy;};
  return new Proxy(db,{get(t,k){if(k==='prepare')return sql=>wrap(t.prepare(sql));if(k==='batch')return async ss=>(await t.batch(ss.map(x=>originals.get(x)||x))).map(record);const v=t[k];return typeof v==='function'?v.bind(t):v;}});
+}
+
+
+// Optional account analytics: no network request until the owner explicitly opens it.
+const cloudUsageCache=new Map();
+async function cloudUsage(env,session) {
+  if(!env.OWNER_TEACHER_ID||env.OWNER_TEACHER_ID!==session.user_id)throw new AppError('제작자만 계정 사용량을 볼 수 있습니다.','FORBIDDEN',403);
+  if(!env.CF_ANALYTICS_ACCOUNT_ID||!env.CF_ANALYTICS_TOKEN)return {connected:false,reason:'서버의 Cloudflare 분석 연결을 설정한 뒤 조회할 수 있습니다.'};
+  const cacheKey=await sha256(env.CF_ANALYTICS_ACCOUNT_ID+'|'+env.CF_ANALYTICS_TOKEN),cached=cloudUsageCache.get(cacheKey);
+  if(cached&&cached.expires>Date.now())return cached.promise;
+  const promise=(async()=>{
+    const end=new Date().toISOString(),start=end.slice(0,10)+'T00:00:00.000Z';
+    const datasets=[
+      ['Workers','workersInvocationsAdaptive','sum { requests errors subrequests }'],
+      ['D1','d1AnalyticsAdaptiveGroups','sum { rowsRead rowsWritten readQueries writeQueries }'],
+      ['R2','r2OperationsAdaptiveGroups','sum { requests }'],
+      ['Durable Objects','durableObjectsInvocationsAdaptiveGroups','sum { requests }']
+    ];
+    const products=await Promise.all(datasets.map(async([name,node,fields])=>{
+      try{
+        const query=`query($account:string!){viewer{accounts(filter:{accountTag:$account}){${node}(limit:1,filter:{datetime_geq:${JSON.stringify(start)},datetime_leq:${JSON.stringify(end)}}){${fields}}}}}`;
+        const response=await fetch('https://api.cloudflare.com/client/v4/graphql',{method:'POST',headers:{Authorization:'Bearer '+env.CF_ANALYTICS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({query,variables:{account:env.CF_ANALYTICS_ACCOUNT_ID,start,end}}),signal:AbortSignal.timeout(15000)});
+        if(!response.ok)return {name,available:false,reason:'분석 서버 응답 '+response.status+' · 권한과 연결을 확인하세요.'};
+        const json=await response.json(),rows=json.data?.viewer?.accounts?.[0]?.[node];
+        if(json.errors?.length||!Array.isArray(rows))return {name,available:false,reason:'이 분석 자료를 조회할 수 없습니다. 계정의 분석 권한·요금제·API 필드를 확인하세요.'};
+        // No dimensions requested: the API aggregates the complete selected account/time window.
+        return {name,available:true,values:rows[0]?.sum||{},empty:!rows.length};
+      }catch{return {name,available:false,reason:'분석 서버에 연결하지 못했습니다. 잠시 후 다시 조회하세요.'};}
+    }));
+    return {connected:products.some(p=>p.available),configured:true,scope:'Cloudflare 계정 전체 · 오늘 UTC 00:00 이후(한국 시간 오전 9시 기준)',start,end,fetchedAt:new Date().toISOString(),products,note:'분석 반영 지연·샘플링이 있을 수 있습니다. 청구서·잔여 무료 한도와 동일한 수치가 아니며 저장용량은 Cloudflare 대시보드에서 확인하세요.'};
+  })();
+  cloudUsageCache.clear();cloudUsageCache.set(cacheKey,{expires:Date.now()+300000,promise});return promise;
+}
+
+function jobResult(job,extra={}) {return {jobId:job.id,kind:job.kind,status:job.status,cursor:job.cursor,total:job.total,...extra};}
+async function pendingJob(env,session,kind,source) {return env.DB.prepare("SELECT * FROM backup_jobs WHERE teacher_id=? AND kind=? AND source_id=? AND status IN ('pending','cleaning')").bind(session.user_id,kind,source).first();}
+async function ownedJob(env,session,id) {const j=await env.DB.prepare('SELECT * FROM backup_jobs WHERE id=? AND teacher_id=?').bind(String(id||''),session.user_id).first();if(!j)throw new AppError('작업을 찾을 수 없습니다.','NOT_FOUND',404);return j;}
+async function startRestoreJob(env,session,p,kind='restore') {
+  const old=await pendingJob(env,session,kind,p.backupId);if(old)return jobResult(old);
+  const {pack,row}=await verifiedBackup(env,session,p.backupId,true);
+  if(kind==='restore'&&row.restored_class_id)return {status:'done',classId:row.restored_class_id,reused:true};
+  const name=String(p.name||(kind==='verify'?'검사':'')).trim().slice(0,40);if(!name)throw new AppError('새 클래스 이름을 입력하세요.','INVALID');
+  const maps=[];for(const rows of Object.values(pack.tables))for(const r of rows)maps.push([r.id,uid('restored')]);for(const f of pack.files)maps.push([f.id,uid('file')]);
+  const id=uid('restorejob'),state={backupId:row.id,name,classId:uid('class'),code:randomRoomCode(),maps,checksum:row.checksum};
+  await env.DB.prepare('INSERT INTO backup_jobs(id,teacher_id,class_id,kind,source_id,total,state,created_at) VALUES(?,?,?,?,?,?,?,?)').bind(id,session.user_id,row.class_id,kind,row.id,pack.files.length,JSON.stringify(state),nowIso()).run();
+  return {jobId:id,kind,status:'pending',cursor:0,total:pack.files.length};
+}
+async function stepBackupJob(env,session,id) {
+  const existing=await ownedJob(env,session,id);
+  if(existing.status==='done')return jobResult(existing,JSON.parse(existing.state).result||{});
+  const lease=Date.now()+120000;
+  const job=await env.DB.prepare("UPDATE backup_jobs SET lease_until=? WHERE id=? AND teacher_id=? AND lease_until<? AND status IN ('pending','cleaning') RETURNING *").bind(lease,id,session.user_id,Date.now()).first();
+  if(!job)throw new AppError('다른 창에서 처리 중입니다. 잠시 후 이어가세요.','BACKUP_BUSY',409);
+  const state=JSON.parse(job.state);let commitAttempted=false;
+  try{
+    let pack;
+    if(job.kind==='backup'){
+      const obj=await env.FILES.get(state.packKey);if(!obj)throw new AppError('진행 중 보관 원본이 없습니다.','BACKUP_MISSING');const text=await obj.text();if(await sha256(text)!==state.checksum)throw new AppError('작업 원본이 변경되었습니다.','BACKUP_INTEGRITY');pack=JSON.parse(text);
+    }else{
+      const source=await verifiedBackup(env,session,state.backupId,true);if(source.row.checksum!==state.checksum)throw new AppError('복원 원본이 변경되었습니다.','BACKUP_INTEGRITY');
+      if(job.kind==='restore'&&source.row.restored_class_id){const result={classId:source.row.restored_class_id,reused:true};await env.DB.prepare("UPDATE backup_jobs SET status='done',lease_until=0,state=? WHERE id=? AND lease_until=?").bind(JSON.stringify({...state,result}),id,lease).run();return jobResult({...job,status:'done'},result);}
+      pack=source.pack;
+    }
+    const maps=new Map(state.maps||[]),target=f=>job.kind==='backup'?`backups/${session.user_id}/${id}/${f.id}`:`restored/${state.classId}/${maps.get(f.id)}`;
+    const end=Math.min(job.cursor+3,pack.files.length);
+    for(let i=job.cursor;i<end;i++){
+      const file=pack.files[i],key=target(file);
+      if(job.status==='cleaning'){if(job.kind!=='verify')await env.FILES.delete(key);continue;}
+      if(job.kind==='verify'){const f=await env.FILES.head(file.backup_key);if(!f||f.etag!==file.backup_etag||f.size!==file.size)throw new AppError('보관 첨부가 누락되거나 변경되었습니다.','BACKUP_INTEGRITY');continue;}
+      const source=await env.FILES.get(job.kind==='backup'?file.r2_key:file.backup_key);
+      if(!source?.body||source.size!==file.size||(job.kind==='restore'&&source.etag!==file.backup_etag))throw new AppError('첨부 원본이 누락되거나 변경되었습니다. 파일을 확인한 뒤 이어가세요.','BACKUP_INTEGRITY');
+      const written=await env.FILES.put(key,source.body);
+      if(!written||written.etag!==source.etag||written.size!==source.size)throw new AppError('첨부 복사 검증 실패. 다시 이어갈 수 있습니다.','BACKUP_INTEGRITY');
+      if(job.kind==='backup')state.etags[i]=written.etag;
+    }
+    if(end<pack.files.length){
+      await env.DB.prepare("UPDATE backup_jobs SET cursor=?,state=?,lease_until=0,error='' WHERE id=? AND lease_until=?").bind(end,JSON.stringify(state),id,lease).run();return jobResult({...job,cursor:end});
+    }
+    if(job.status==='cleaning'){
+      if(job.kind==='backup'){await env.FILES.delete(`backups/${session.user_id}/${id}/manifest.json`);await env.FILES.delete(state.packKey);await env.DB.prepare('UPDATE class_operations SET lease_until=0,next_backup=? WHERE class_id=? AND teacher_id=?').bind(Date.now()+7*86400000,job.class_id,session.user_id).run();}
+      await env.DB.prepare('DELETE FROM backup_jobs WHERE id=? AND lease_until=?').bind(id,lease).run();return jobResult({...job,status:'cancelled',cursor:end});
+    }
+    let result;
+    if(job.kind==='verify'){result={verified:true,files:pack.files.length};await env.DB.prepare("UPDATE backup_jobs SET status='done',cursor=?,state=?,lease_until=0,error='' WHERE id=? AND lease_until=?").bind(end,JSON.stringify({...state,result}),id,lease).run();return jobResult({...job,status:'done',cursor:end},result);}
+    if(job.kind==='backup'){
+      const current=await ownedClass(env,session,job.class_id);if(Number(current.version)!==Number(state.sourceVersion))throw new AppError('보관 도중 클래스가 바뀌었습니다. 진행본 정리 후 새로 시작해 주세요.','BACKUP_CHANGED',409);
+      pack.files=pack.files.map((f,i)=>({...f,backup_key:target(f),backup_etag:state.etags[i]}));
+      const text=JSON.stringify(pack),checksum=await sha256(text),key=`backups/${session.user_id}/${id}/manifest.json`;
+      await env.FILES.put(key,text,{httpMetadata:{contentType:'application/json'}});const check=await env.FILES.get(key);
+      if(!check||await sha256(await check.text())!==checksum)throw new AppError('완성 보관본 재읽기 검사 실패','BACKUP_INTEGRITY');
+      result={id,verified:true,files:pack.files.length};state.result=result;
+      commitAttempted=true;
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO class_backups(id,teacher_id,class_id,created_at,r2_key,checksum,bytes) VALUES(?,?,?,?,?,?,?)').bind(id,session.user_id,job.class_id,pack.createdAt,key,checksum,pack.files.reduce((n,f)=>n+f.size,0)+new TextEncoder().encode(text).length),
+        env.DB.prepare("UPDATE class_operations SET last_backup=?,last_error='',lease_until=0,next_backup=? WHERE class_id=? AND teacher_id=?").bind(pack.createdAt,Date.now()+7*86400000,job.class_id,session.user_id),
+        env.DB.prepare("UPDATE backup_jobs SET status='done',cursor=?,state=?,lease_until=0,error='' WHERE id=? AND lease_until=?").bind(end,JSON.stringify(state),id,lease)
+      ]);
+      // Complete snapshot is durable; removal failure of temporary metadata does not fail the backup.
+      try{await env.FILES.delete(state.packKey);}catch{}
+    }else{
+      // Keep the last copy checkpoint before atomic DB restoration, so a lost response is retryable.
+      await env.DB.prepare('UPDATE backup_jobs SET cursor=?,state=? WHERE id=? AND lease_until=?').bind(end,JSON.stringify(state),id,lease).run();
+      commitAttempted=true;result=await restoreClassBackup(env,session,{backupId:state.backupId,name:state.name},state);
+      await env.DB.prepare("UPDATE backup_jobs SET status='done',lease_until=0,error='',state=? WHERE id=? AND lease_until=?").bind(JSON.stringify({...state,result}),id,lease).run();
+    }
+    invalidateFileStorageStatus();return jobResult({...job,status:'done',cursor:end},result);
+  }catch(e){
+    // Never delete copies after an uncertain commit. A retry reconciles the committed backup/restore.
+    if(commitAttempted&&job.kind==='backup'){
+      const saved=await env.DB.prepare('SELECT id FROM class_backups WHERE id=? AND teacher_id=?').bind(id,session.user_id).first();
+      if(saved){await env.DB.prepare("UPDATE backup_jobs SET status='done',lease_until=0,error='' WHERE id=?").bind(id).run();return jobResult({...job,status:'done',cursor:job.total},{id,verified:true});}
+    }
+    await env.DB.prepare('UPDATE backup_jobs SET error=?,lease_until=0 WHERE id=? AND lease_until=?').bind(String(e.message).slice(0,300),id,lease).run();throw e;
+  }
+}
+
+// Short-lived per-owner request coalescing; events are never persisted to D1.
+const calendarReadCache=new Map();
+function invalidateCalendarCache(owner){for(const [key,row] of calendarReadCache)if(row.owner===owner)calendarReadCache.delete(key);}
+async function cachedCalendarEvents(env,owner,path){
+ const key=owner+'|'+path,cached=calendarReadCache.get(key);if(cached&&cached.expires>Date.now())return cached.promise;
+ if(calendarReadCache.size>=40)calendarReadCache.delete(calendarReadCache.keys().next().value);
+ const row={owner,expires:Date.now()+15000};row.promise=googleRequest(env,owner,path).catch(e=>{if(calendarReadCache.get(key)===row)calendarReadCache.delete(key);throw e;});calendarReadCache.set(key,row);return row.promise;
 }

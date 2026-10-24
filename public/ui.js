@@ -169,7 +169,7 @@
   }
 
   function modalDirty(){return Boolean(modalRoot.querySelector('.modal[data-dirty="true"]'));}
-  document.addEventListener('click',function(e){const link=e.target.closest&&e.target.closest('a[href]');if(link&&!link.target&&modalDirty()&&!window.confirm('작성 중인 내용이 있습니다. 다른 화면으로 이동할까요? 첨부파일은 다시 선택해야 합니다.')){e.preventDefault();e.stopImmediatePropagation();}},true);
+  document.addEventListener('click',function(e){const link=e.target.closest&&e.target.closest('a[href]');if(link&&!link.target&&modalDirty()&&!window.confirm('작성 중인 내용이 있습니다. 다른 화면으로 이동할까요? 초안 보관 상태를 확인해 주세요.')){e.preventDefault();e.stopImmediatePropagation();}},true);
   window.addEventListener('beforeunload',function(e){if(modalDirty()){e.preventDefault();e.returnValue='';}});
   function openModal(options) {
     closeModal();
@@ -186,7 +186,7 @@
       '</div>';
     document.body.style.overflow = 'hidden';
     var close = modalRoot.querySelector('[data-close-modal]');
-    if (close) close.addEventListener('click', function(){if(!modalDirty()||window.confirm('작성 중인 내용이 있습니다. 창을 닫을까요? 첨부파일은 다시 선택해야 합니다.'))closeModal();});
+    if (close) close.addEventListener('click', function(){if(!modalDirty()||window.confirm('작성 중인 내용이 있습니다. 창을 닫을까요? 초안 보관 상태를 확인해 주세요.'))closeModal();});
     var backdrop = modalRoot.querySelector('[data-modal-backdrop]');
     if (backdrop && options.closeOnBackdrop !== false) {
       backdrop.addEventListener('click', function (event) {
@@ -292,12 +292,14 @@
         button.addEventListener('click', function () {
           keepIds = keepIds.filter(function (id) { return id !== button.dataset.removeOld; });
           paint();
+          if(picker.onDraftChange)picker.onDraftChange();
         });
       });
       list.querySelectorAll('[data-remove-new]').forEach(function (button) {
         button.addEventListener('click', function () {
           selected.splice(Number(button.dataset.removeNew), 1);
           paint();
+          if(picker.onDraftChange)picker.onDraftChange();
         });
       });
     }
@@ -310,6 +312,7 @@
         if (!duplicate) selected.push(file);
       });
       paint();
+      if(picker.onDraftChange)picker.onDraftChange();
     }
 
     if (input) input.addEventListener('change', function () { addFiles(input.files); });
@@ -328,11 +331,12 @@
       });
       drop.addEventListener('drop', function (event) { addFiles(event.dataTransfer.files); });
     }
-    paint();
-    return {
+    var picker = {
+      restoreDraft: function(files,keep){selected=files.slice();keepIds=keep.filter(function(id){return (initialFiles||[]).some(function(f){return f.id===id;});});paint();if(picker.onDraftChange)picker.onDraftChange();},
       files: function () { return selected.slice(); },
       keepAttachmentIds: function () { return keepIds.slice(); }
     };
+    dialog.learnFilePicker=picker;paint();return picker;
   }
 
   function blobUrlFromBase64(file) {
