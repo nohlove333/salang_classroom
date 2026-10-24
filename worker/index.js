@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-24-v66';
+const RELEASE = '2026-10-24-v67';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';

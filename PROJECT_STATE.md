@@ -85,3 +85,10 @@ GitHub checks에서 기존 Workers Builds 성공과 Version ID 9adc6eb7-3a5f-402
 - 보관: 대상 표 5개 bounded 조회(합계500행 지원), 첨부 관계·메타 조회, F개 파일당 R2 get/put 2F회+manifest put/get 2회. 별도 검사는 manifest get 1회+파일 head F회.
 - 복원: JSON 기반 표별 INSERT SELECT로 행별 SQL 호출을 줄여 하나의 D1 batch로 반영. R2 파일은 별도 복사.
 - 이번 추가 기능은 Google API 요청을 늘리지 않음. Google 미연결 시 일정 API 호출 없음.
+
+## 2026-10-24 v67 — 기존 디자인 복구
+사용자 정정: 요청 범위는 레이아웃 변경이며 기존 디자인·로고를 유지해야 한다. 이 지시가 앞선 전면 디자인 허용보다 우선한다.
+- 원래 site-header 노출 복구, 기존 brand-logo.jpg 및 브랜드 명칭을 사이드바에서도 사용. 로고 원본 변경 없음.
+- workspace의 Arial·독립 보라색 테마를 제거하고 기존 styles.css의 SUITE/색상/카드/버튼 스타일을 재사용. 별도 꽃 문자 장식 제거.
+- 좌측 탐색·중앙 대시보드·보조 패널과 기존 기능/DB는 유지. 향후 브랜드 변경은 별도 명시적 요청 없이 하지 않는다.
+- 구문·기존 테스트 및 운영 배포 확인으로 검증하며, 실제 로그인 화면의 픽셀 검증은 별도 미완이다.

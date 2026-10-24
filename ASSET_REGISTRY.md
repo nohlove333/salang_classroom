@@ -28,3 +28,10 @@
 - public/operations.js: 관리자·전자칠판·참여방 타이머. public/outbox.js: 미전송 보관함. public/privacy.html: 개인정보 기능 안내.
 - public/styles.css/workspace.css: 기존 파스텔 체계의 관리 카드·스크롤 전자칠판·모바일 접기. 브랜드 이미지 변경 없음.
 - tests/operations.test.mjs/outbox.test.mjs/operations-ui.test.mjs: 격리 복원·권한·큐·컨트롤러 증거. 실제 화면 스크린샷 없음.
+
+## 2026-10-24 v67 — 기존 디자인 복구
+사용자 정정: 요청 범위는 레이아웃 변경이며 기존 디자인·로고를 유지해야 한다. 이 지시가 앞선 전면 디자인 허용보다 우선한다.
+- 원래 site-header 노출 복구, 기존 brand-logo.jpg 및 브랜드 명칭을 사이드바에서도 사용. 로고 원본 변경 없음.
+- workspace의 Arial·독립 보라색 테마를 제거하고 기존 styles.css의 SUITE/색상/카드/버튼 스타일을 재사용. 별도 꽃 문자 장식 제거.
+- 좌측 탐색·중앙 대시보드·보조 패널과 기존 기능/DB는 유지. 향후 브랜드 변경은 별도 명시적 요청 없이 하지 않는다.
+- 구문·기존 테스트 및 운영 배포 확인으로 검증하며, 실제 로그인 화면의 픽셀 검증은 별도 미완이다.
