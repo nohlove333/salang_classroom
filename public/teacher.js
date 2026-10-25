@@ -876,7 +876,7 @@
     if (!session) return;
     activeClassContainer = container;
     stopClassSync();
-    var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'ideas', 'students'].indexOf(tab) >= 0 ? tab : 'announcements';
+    var safeTab = ['posts', 'announcements', 'assignments', 'boards', 'ideas', 'students', 'trash'].indexOf(tab) >= 0 ? tab : 'announcements';
     activeClassTab = safeTab;
     if (classDataOwnerId !== String(session.user && session.user.id || '') || classDataId !== String(classId)) {
       classDataOwnerId = String(session.user && session.user.id || '');
@@ -972,6 +972,7 @@
               tabButton(classId, 'assignments', '과제', counts.assignments, tab) +
               tabButton(classId, 'boards', '보드', counts.boards, tab) +
               tabButton(classId, 'ideas', '아이디어 구름', counts.ideas, tab) +
+              tabButton(classId, 'trash', '휴지통', null, tab) +
               tabButton(classId, 'students', '학생 관리', counts.students, tab) +
             '</nav>' +
             '<section class="panel content-panel">' + renderTab(tab, classId) + '</section>' +
@@ -1010,6 +1011,7 @@
     var clearTimer = container.querySelector('[data-clear-timer]');
     if (clearTimer) clearTimer.addEventListener('click', function () { clearTimerNow(classId, container, tab); });
     bindTabActions(container, classId, tab);
+    if (tab === 'trash') loadClassTrash(classId, container);
     UI.bindFiles(container, 'teacher');
     startCountdownTicker();
   }
@@ -1017,7 +1019,7 @@
   function tabButton(classId, key, label, count, active) {
     return '<a class="tab-button ' + (key === active ? 'active' : '') + '" href="#/teacher/class/' +
       UI.attr(classId) + '/' + key + '">' + UI.escape(label) +
-      '<span class="tab-count">' + UI.escape(count) + '</span></a>';
+      (count == null ? '' : '<span class="tab-count">' + UI.escape(count) + '</span>') + '</a>';
   }
 
   function timerBanner(timer, teacher) {
@@ -1139,11 +1141,69 @@
 
   function renderTab(tab, classId) {
     if (tab === 'posts') return renderTeacherPostIndex(classId);
+    if (tab === 'trash') return '<div class="class-trash" data-class-trash><div class="empty-state"><p>휴지통을 불러오고 있어요.</p></div></div>';
     if (tab === 'assignments') return renderContentList('assignment', classData.assignments, classId);
     if (tab === 'boards') return renderContentList('board', classData.boards, classId);
     if (tab === 'ideas') return renderContentList('idea', classData.ideas || [], classId);
     if (tab === 'students') return renderStudents(classId);
     return renderContentList('announcement', classData.announcements, classId);
+  }
+
+  function loadClassTrash(classId, container) {
+    var root = container.querySelector('[data-class-trash]');
+    if (!root) return;
+    API.request('getClassTrash', { classId: classId }, 'teacher').then(function (result) {
+      if (!root.isConnected) return;
+      var posts = result.posts || [];
+      root.innerHTML = '<div class="content-head"><div><h2>삭제한 학생 게시글</h2>' +
+        '<p>복구하면 원래 보드나 아이디어 구름에 다시 나타나요. 휴지통을 비우면 게시글과 첨부파일이 영구 삭제됩니다.</p></div>' +
+        '<div class="inline-actions"><button class="button secondary small" type="button" data-trash-refresh>새로고침</button>' +
+        '<button class="button danger small" type="button" data-empty-trash ' + (!posts.length ? 'disabled' : '') + '>휴지통 비우기' +
+        (posts.length ? ' (' + posts.length + ')' : '') + '</button></div></div>' +
+        (!posts.length ? UI.empty('휴지통이 비어 있어요', '삭제한 학생 게시글은 여기에 보관됩니다.') :
+          '<div class="item-list">' + posts.map(function (post) {
+            return '<article class="item-card"><div class="item-top"><div><h3>' +
+              UI.escape(post.studentNumber + '번 ' + post.studentName + ' · ' + (post.title || post.parentTitle || '학생 게시글')) +
+              '</h3><div class="meta-line"><span>' + UI.escape(post.parentTitle || '') + '</span><span>삭제 ' +
+              UI.escape(UI.date(post.deletedAt, true)) + '</span></div></div><span class="status-badge">' +
+              (post.kind === 'idea' ? '아이디어' : '보드 글') + '</span></div>' +
+              (post.text ? '<p class="item-body">' + UI.escape(post.text) + '</p>' : '') +
+              '<div class="inline-actions"><button class="button secondary small" type="button" data-restore-post="' +
+              UI.attr(post.id) + '" data-post-kind="' + UI.attr(post.kind) + '">복구</button></div></article>';
+          }).join('') + '</div>');
+      root.querySelector('[data-trash-refresh]').addEventListener('click', function () { loadClassTrash(classId, container); });
+      root.querySelectorAll('[data-restore-post]').forEach(function (button) {
+        button.addEventListener('click', async function () {
+          UI.busy(button, true, '복구 중…');
+          try {
+            await API.request('restoreClassPost', { classId: classId, postId: button.dataset.restorePost, kind: button.dataset.postKind }, 'teacher');
+            UI.toast('게시글을 복구했습니다.');
+            renderClass(container, classId, 'trash', true);
+          } catch (error) { UI.toast(error.message, 'error'); UI.busy(button, false); }
+        });
+      });
+      var emptyButton = root.querySelector('[data-empty-trash]');
+      if (emptyButton) emptyButton.addEventListener('click', async function () {
+        var confirmed = await UI.confirm({
+          title: '휴지통을 비울까요?',
+          message: '휴지통에 있는 게시글 ' + posts.length + '개와 첨부파일을 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.',
+          confirmText: '영구 삭제', danger: true
+        });
+        if (!confirmed) return;
+        UI.busy(emptyButton, true, '비우는 중…');
+        try {
+          await API.request('emptyClassTrash', { classId: classId }, 'teacher');
+          UI.toast('휴지통을 비웠습니다.');
+          renderClass(container, classId, 'trash', true);
+        } catch (error) { UI.toast(error.message, 'error'); UI.busy(emptyButton, false); }
+      });
+    }).catch(function (error) {
+      if (root.isConnected) root.innerHTML = '<div class="empty-state"><p>휴지통을 불러오지 못했어요.</p>' +
+        '<button class="button secondary small" type="button" data-trash-retry>다시 시도</button></div>';
+      var retry = root.querySelector('[data-trash-retry]');
+      if (retry) retry.addEventListener('click', function () { loadClassTrash(classId, container); });
+      UI.toast(error.message, 'error');
+    });
   }
 
   function typeInfo(type) {
@@ -1859,7 +1919,7 @@
     body.querySelector('[data-edit-idea]').addEventListener('click', function () { openContentEditor('idea', idea, classId, container, tab); });
     body.querySelectorAll('[data-delete-idea-post]').forEach(function (button) {
       button.addEventListener('click', async function () {
-        var yes = await UI.confirm({ title: '익명 의견 삭제', message: '선택한 의견을 삭제할까요?', confirmText: '삭제', danger: true });
+        var yes = await UI.confirm({ title: '익명 의견 삭제', message: '선택한 의견을 휴지통으로 이동할까요? 휴지통에서 복구할 수 있습니다.', confirmText: '휴지통으로 이동', danger: true });
         if (!yes) return;
         try {
           await API.request('deleteIdeaPost', { postId: button.dataset.deleteIdeaPost }, 'teacher');
@@ -1870,7 +1930,7 @@
           teacherIdeaModalState.revealAuthors = state.revealAuthors;
           teacherIdeaModalState.grouped = state.grouped;
           paintTeacherIdeaModal(teacherIdeaModalState, classId, container, tab);
-          UI.toast('의견을 삭제했습니다.');
+          UI.toast('의견을 휴지통으로 이동했습니다.');
         } catch (error) { UI.toast(error.message, 'error'); }
       });
     });
@@ -2118,8 +2178,8 @@
     dialog.querySelector('[data-delete-post]').addEventListener('click', async function () {
       var yes = await UI.confirm({
         title: '학생 게시글 삭제',
-        message: post.studentNumber + '번 ' + post.studentName + '의 글과 첨부파일을 삭제할까요?',
-        confirmText: '삭제',
+        message: post.studentNumber + '번 ' + post.studentName + '의 글을 휴지통으로 이동할까요? 첨부파일도 함께 보관됩니다.',
+        confirmText: '휴지통으로 이동',
         danger: true
       });
       if (!yes) {
@@ -2132,7 +2192,7 @@
         board.postCount = Math.max(0, Number(board.postCount || 0) - 1);
         paintClass(container, classId, tab);
         openTeacherBoard(board.id, classId, container, tab);
-        UI.toast('게시글을 삭제했습니다.');
+        UI.toast('게시글을 휴지통으로 이동했습니다.');
       } catch (error) {
         UI.toast(error.message, 'error');
       }

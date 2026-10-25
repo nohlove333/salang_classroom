@@ -798,8 +798,8 @@
       .filter(function (item) { return item.classId === classId; })
       .sort(function (a, b) { return Number(a.number) - Number(b.number); });
     var classSubmissions = state.submissions.filter(function (item) { return item.classId === classId; });
-    var classPosts = state.boardPosts.filter(function (item) { return item.classId === classId; });
-    var classIdeaPosts = state.ideaPosts.filter(function (item) { return item.classId === classId; });
+    var classPosts = state.boardPosts.filter(function (item) { return item.classId === classId && !item.deletedAt; });
+    var classIdeaPosts = state.ideaPosts.filter(function (item) { return item.classId === classId && !item.deletedAt; });
     var assignmentItems = state.assignments.filter(function (item) { return item.classId === classId; }).map(function (item) {
       return Object.assign({}, item, {
         submissionCount: classSubmissions.filter(function (submission) {
@@ -987,6 +987,41 @@
 
       if (action === 'getTeacherClass') {
         return demoClassData(state, payload.classId);
+      }
+
+      if (action === 'getClassTrash') {
+        var trashBoards = state.boardPosts.filter(function (item) { return item.classId === payload.classId && item.deletedAt; }).map(function (item) {
+          var board = state.boards.find(function (entry) { return entry.id === item.boardId; });
+          return { kind: 'board', id: item.id, parentTitle: board ? board.title : '삭제된 보드', title: item.title || '', text: item.text || '', studentName: item.studentName, studentNumber: item.studentNumber, deletedAt: item.deletedAt, createdAt: item.createdAt, attachments: item.attachments || [] };
+        });
+        var trashIdeas = state.ideaPosts.filter(function (item) { return item.classId === payload.classId && item.deletedAt; }).map(function (item) {
+          var idea = state.ideas.find(function (entry) { return entry.id === item.ideaId; });
+          return { kind: 'idea', id: item.id, parentTitle: idea ? idea.title : '삭제된 아이디어 구름', title: '', text: item.text || '', studentName: item.studentName, studentNumber: item.studentNumber, deletedAt: item.deletedAt, createdAt: item.createdAt, attachments: [] };
+        });
+        return { posts: trashBoards.concat(trashIdeas).sort(function (a, b) { return String(b.deletedAt).localeCompare(String(a.deletedAt)); }) };
+      }
+
+      if (action === 'restoreClassPost') {
+        if (role !== 'teacher') throw new ApiError('교사만 게시글을 복구할 수 있습니다.', 'FORBIDDEN');
+        var restoreItem = (payload.kind === 'board' ? state.boardPosts : payload.kind === 'idea' ? state.ideaPosts : []).find(function (item) {
+          return item.id === payload.postId && item.classId === payload.classId && item.deletedAt;
+        });
+        if (!restoreItem) throw new ApiError('휴지통에서 게시글을 찾을 수 없습니다.', 'NOT_FOUND');
+        restoreItem.deletedAt = null;
+        restoreItem.updatedAt = nowIso();
+        setDemoState(state);
+        return { restored: true };
+      }
+
+      if (action === 'emptyClassTrash') {
+        if (role !== 'teacher') throw new ApiError('교사만 휴지통을 비울 수 있습니다.', 'FORBIDDEN');
+        var emptiedBoards = state.boardPosts.filter(function (item) { return item.classId === payload.classId && item.deletedAt; });
+        var emptiedIdeas = state.ideaPosts.filter(function (item) { return item.classId === payload.classId && item.deletedAt; });
+        state.boardPosts = state.boardPosts.filter(function (item) { return item.classId !== payload.classId || !item.deletedAt; });
+        state.ideaPosts = state.ideaPosts.filter(function (item) { return item.classId !== payload.classId || !item.deletedAt; });
+        await deleteDemoFiles(attachmentIds(emptiedBoards));
+        setDemoState(state);
+        return { emptied: true, deletedPosts: emptiedBoards.length + emptiedIdeas.length };
       }
 
       if (action === 'getStudentClass') {
@@ -1192,6 +1227,7 @@
           }
           post.status = 'published';
           post.revisionMessage = '';
+          post.deletedAt = null;
           post.updatedAt = nowIso();
         } else {
           var postFiles = await replaceDemoAttachments([], [], payload.files);
@@ -1220,9 +1256,9 @@
       }
 
       if (action === 'deleteBoardPost') {
-        var deletedPosts = state.boardPosts.filter(function (item) { return item.id === payload.postId; });
-        state.boardPosts = state.boardPosts.filter(function (item) { return item.id !== payload.postId; });
-        await deleteDemoFiles(attachmentIds(deletedPosts));
+        state.boardPosts.forEach(function (item) {
+          if (item.id === payload.postId) { item.deletedAt = nowIso(); item.updatedAt = item.deletedAt; }
+        });
         setDemoState(state);
         return { deleted: true };
       }
@@ -1280,9 +1316,10 @@
 
       if (action === 'deleteIdeaPost') {
         var ideaDeleteSession = role === 'student' ? readSession('student') : null;
-        state.ideaPosts = state.ideaPosts.filter(function (item) {
-          if (item.id !== payload.postId) return true;
-          return Boolean(ideaDeleteSession && item.studentId !== ideaDeleteSession.user.id);
+        state.ideaPosts.forEach(function (item) {
+          if (item.id === payload.postId && (!ideaDeleteSession || item.studentId === ideaDeleteSession.user.id)) {
+            item.deletedAt = nowIso(); item.updatedAt = item.deletedAt;
+          }
         });
         setDemoState(state);
         return { deleted: true };

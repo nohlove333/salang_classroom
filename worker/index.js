@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-25-v69';
+const RELEASE = '2026-10-26-v70';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS board_posts (
   text TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'published',
   revision_message TEXT NOT NULL DEFAULT '',
+  deleted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(board_id, student_id),
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS idea_posts (
   student_name TEXT NOT NULL,
   group_name TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL,
+  deleted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (idea_id) REFERENCES contents(id) ON DELETE CASCADE,
@@ -390,9 +392,22 @@ async function ensureSchema(env) {
     }
   }
   await ensureBoardPostTitleSchema(env);
+  await ensurePostTrashSchema(env);
   await ensureGuestBoardSchema(env);
   await ensureClassTimerSoundSchema(env);
   featureSchemaVerified = true;
+}
+
+async function ensurePostTrashSchema(env) {
+  for (const table of ['board_posts', 'idea_posts']) {
+    const columns = await all(env.DB.prepare(`PRAGMA table_info(${table})`));
+    if (columns.some((column) => column.name === 'deleted_at')) continue;
+    try {
+      await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN deleted_at TEXT`).run();
+    } catch (error) {
+      if (!String(error && error.message || '').includes('duplicate column name')) throw error;
+    }
+  }
 }
 
 async function ensureClassTimerSoundSchema(env) {
@@ -778,8 +793,8 @@ async function readClassSnapshot(env, classId, studentId = '') {
         ? 'SELECT * FROM submissions WHERE class_id=? AND student_id=? ORDER BY submitted_at DESC'
         : 'SELECT * FROM submissions WHERE class_id=? ORDER BY student_number, submitted_at DESC'
     ).bind(...(studentId ? [classId, studentId] : [classId]))),
-    all(env.DB.prepare('SELECT * FROM board_posts WHERE class_id=? ORDER BY student_number').bind(classId)),
-    all(env.DB.prepare('SELECT * FROM idea_posts WHERE class_id=? ORDER BY created_at, id').bind(classId)),
+    all(env.DB.prepare('SELECT * FROM board_posts WHERE class_id=? AND deleted_at IS NULL ORDER BY student_number').bind(classId)),
+    all(env.DB.prepare('SELECT * FROM idea_posts WHERE class_id=? AND deleted_at IS NULL ORDER BY created_at, id').bind(classId)),
     env.DB.prepare('SELECT * FROM class_timers WHERE class_id=?').bind(classId).first(),
     loadAttachmentMap(env, classId)
   ]);
@@ -1863,7 +1878,7 @@ async function upsertBoardPost(env, session, payload) {
   if (row) {
     const nextTitle = Object.prototype.hasOwnProperty.call(payload, 'title') ? title : (row.title || '');
     await env.DB.prepare(
-      "UPDATE board_posts SET title=?,text=?,student_name=?,student_number=?,status='published',revision_message='',updated_at=? WHERE id=?"
+      "UPDATE board_posts SET title=?,text=?,student_name=?,student_number=?,status='published',revision_message='',deleted_at=NULL,updated_at=? WHERE id=?"
     ).bind(nextTitle, text, student.name, student.number, time, row.id).run();
   } else {
     const id = uid('post');
@@ -1885,7 +1900,7 @@ async function setBoardReaction(env, session, payload) {
   const allowed = new Set(['❤️', '👏', '😊', '💡', '👍']);
   if (!allowed.has(emoji)) throw new AppError('응원 이모지만 사용할 수 있어요.', 'INVALID_REACTION');
   const postId = String(payload.postId || '');
-  const post = await env.DB.prepare('SELECT id,class_id,status FROM board_posts WHERE id=? AND class_id=?')
+  const post = await env.DB.prepare('SELECT id,class_id,status FROM board_posts WHERE id=? AND class_id=? AND deleted_at IS NULL')
     .bind(postId, session.class_id).first();
   if (!post) throw new AppError('게시글을 찾을 수 없습니다.', 'NOT_FOUND', 404);
   if (post.status !== 'published' && post.status !== 'confirmed') {
@@ -1919,8 +1934,10 @@ async function deleteBoardPost(env, session, payload) {
   } else {
     await ownedClass(env, session, row.class_id);
   }
-  await deleteOwnerFiles(env, 'board_post', [row.id]);
-  await env.DB.prepare('DELETE FROM board_posts WHERE id=?').bind(row.id).run();
+  if (row.deleted_at) return { deleted: true };
+  const deletedAt = nowIso();
+  await env.DB.prepare('UPDATE board_posts SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL')
+    .bind(deletedAt, deletedAt, row.id).run();
   await touchClass(env, row.class_id);
   return { deleted: true };
 }
@@ -1951,7 +1968,7 @@ async function upsertIdeaPost(env, session, payload) {
       .bind(postId, idea.id, student.id).first();
     if (!row) throw new AppError('수정할 의견을 찾을 수 없습니다.', 'NOT_FOUND', 404);
     await env.DB.prepare(
-      'UPDATE idea_posts SET text=?,group_name=?,student_name=?,student_number=?,updated_at=? WHERE id=?'
+      'UPDATE idea_posts SET text=?,group_name=?,student_name=?,student_number=?,deleted_at=NULL,updated_at=? WHERE id=?'
     ).bind(text, groupName, student.name, student.number, time, row.id).run();
   } else {
     const id = uid('idea_post');
@@ -1975,13 +1992,79 @@ async function deleteIdeaPost(env, session, payload) {
   } else {
     await ownedClass(env, session, row.class_id);
   }
-  await env.DB.prepare('DELETE FROM idea_posts WHERE id=?').bind(row.id).run();
+  if (row.deleted_at) return { deleted: true };
+  const deletedAt = nowIso();
+  await env.DB.prepare('UPDATE idea_posts SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL')
+    .bind(deletedAt, deletedAt, row.id).run();
   await touchClass(env, row.class_id);
   return { deleted: true };
 }
 
+async function getClassTrash(env, session, payload) {
+  const classRow = await ownedClass(env, session, payload.classId);
+  const [boardRows, ideaRows, contentRows, attachmentRows] = await Promise.all([
+    all(env.DB.prepare('SELECT * FROM board_posts WHERE class_id=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC,id').bind(classRow.id)),
+    all(env.DB.prepare('SELECT * FROM idea_posts WHERE class_id=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC,id').bind(classRow.id)),
+    all(env.DB.prepare("SELECT id,title,type FROM contents WHERE class_id=? AND type IN ('board','idea')").bind(classRow.id)),
+    all(env.DB.prepare(
+      "SELECT a.owner_id,f.* FROM attachments a JOIN files f ON f.id=a.file_id JOIN board_posts p ON p.id=a.owner_id WHERE a.owner_type='board_post' AND p.class_id=? AND p.deleted_at IS NOT NULL ORDER BY a.sort_order"
+    ).bind(classRow.id))
+  ]);
+  const titles = new Map(contentRows.map((row) => [row.id, row.title]));
+  const attachmentMap = new Map();
+  for (const row of attachmentRows) {
+    if (!attachmentMap.has(row.owner_id)) attachmentMap.set(row.owner_id, []);
+    attachmentMap.get(row.owner_id).push(fileJson(row));
+  }
+  const posts = [
+    ...boardRows.map((row) => ({
+      kind: 'board', id: row.id, title: row.title || '', text: row.text || '',
+      studentName: row.student_name, studentNumber: Number(row.student_number),
+      parentTitle: titles.get(row.board_id) || '삭제된 보드', deletedAt: row.deleted_at,
+      createdAt: row.created_at, attachments: attachmentMap.get(row.id) || []
+    })),
+    ...ideaRows.map((row) => ({
+      kind: 'idea', id: row.id, title: '', text: row.text || '',
+      studentName: row.student_name, studentNumber: Number(row.student_number),
+      parentTitle: titles.get(row.idea_id) || '삭제된 아이디어 구름', deletedAt: row.deleted_at,
+      createdAt: row.created_at, attachments: []
+    }))
+  ].sort((left, right) => String(right.deletedAt).localeCompare(String(left.deletedAt)));
+  return { posts };
+}
+
+async function restoreClassPost(env, session, payload) {
+  const classRow = await ownedClass(env, session, payload.classId);
+  const kind = String(payload.kind || '');
+  const table = kind === 'board' ? 'board_posts' : kind === 'idea' ? 'idea_posts' : '';
+  if (!table) throw new AppError('복구할 게시글 유형이 올바르지 않습니다.', 'INVALID_TYPE');
+  const result = await env.DB.prepare(`UPDATE ${table} SET deleted_at=NULL,updated_at=? WHERE id=? AND class_id=? AND deleted_at IS NOT NULL`)
+    .bind(nowIso(), String(payload.postId || ''), classRow.id).run();
+  if (!Number(result.meta?.changes || 0)) throw new AppError('휴지통에서 게시글을 찾을 수 없습니다.', 'NOT_FOUND', 404);
+  await touchClass(env, classRow.id);
+  return { restored: true };
+}
+
+async function emptyClassTrash(env, session, payload) {
+  const classRow = await ownedClass(env, session, payload.classId);
+  const files = await all(env.DB.prepare(
+    "SELECT f.r2_key FROM files f JOIN attachments a ON a.file_id=f.id JOIN board_posts p ON p.id=a.owner_id WHERE a.owner_type='board_post' AND p.class_id=? AND p.deleted_at IS NOT NULL"
+  ).bind(classRow.id));
+  for (let index = 0; index < files.length; index += 20) {
+    await Promise.all(files.slice(index, index + 20).map((file) => env.FILES.delete(file.r2_key)));
+  }
+  const result = await env.DB.batch([
+    env.DB.prepare("DELETE FROM files WHERE id IN (SELECT a.file_id FROM attachments a JOIN board_posts p ON p.id=a.owner_id WHERE a.owner_type='board_post' AND p.class_id=? AND p.deleted_at IS NOT NULL)").bind(classRow.id),
+    env.DB.prepare('DELETE FROM board_posts WHERE class_id=? AND deleted_at IS NOT NULL').bind(classRow.id),
+    env.DB.prepare('DELETE FROM idea_posts WHERE class_id=? AND deleted_at IS NOT NULL').bind(classRow.id)
+  ]);
+  invalidateFileStorageStatus();
+  await touchClass(env, classRow.id);
+  return { emptied: true, deletedPosts: result.slice(1).reduce((total, item) => total + Number(item.meta?.changes || 0), 0) };
+}
+
 async function reviewBoardPost(env, session, payload) {
-  const row = await env.DB.prepare('SELECT * FROM board_posts WHERE id=? AND class_id=?')
+  const row = await env.DB.prepare('SELECT * FROM board_posts WHERE id=? AND class_id=? AND deleted_at IS NULL')
     .bind(String(payload.postId || ''), String(payload.classId || '')).first();
   if (!row) throw new AppError('게시글을 찾을 수 없습니다.', 'NOT_FOUND', 404);
   await ownedClass(env, session, row.class_id);
@@ -2350,7 +2433,7 @@ async function handleAction(request, env) {
     'getTeacherResources', 'upsertTeacherResource', 'deleteTeacherResource', 'exportClassArchive', 'manageCategory',
     'teacherDashboard', 'createClass', 'updateClass', 'reorderClasses', 'deleteClass', 'getTeacherClass',
     'upsertContent', 'getBulkContentTargets', 'deleteContent', 'addStudents', 'reissueClassPins', 'resetStudentPin',
-    'deleteStudent', 'reviewBoardPost', 'startClassTimer', 'clearClassTimer',
+    'deleteStudent', 'reviewBoardPost', 'getClassTrash', 'restoreClassPost', 'emptyClassTrash', 'startClassTimer', 'clearClassTimer',
     'createDownloadBundle', 'archiveFilesToDrive', 'getStorageStatus',
     'createGuestRoom', 'getTeacherGuestRoom', 'updateGuestRoom', 'closeGuestRoom', 'reopenGuestRoom', 'deleteGuestRoom',
     'createGuestBoard', 'updateGuestBoard', 'deleteGuestBoard'
@@ -2398,6 +2481,9 @@ async function handleAction(request, env) {
     case 'deleteBoardPost': return deleteBoardPost(env, session, payload);
     case 'upsertIdeaPost': return upsertIdeaPost(env, session, payload);
     case 'deleteIdeaPost': return deleteIdeaPost(env, session, payload);
+    case 'getClassTrash': return getClassTrash(env, session, payload);
+    case 'restoreClassPost': return restoreClassPost(env, session, payload);
+    case 'emptyClassTrash': return emptyClassTrash(env, session, payload);
     case 'reviewBoardPost': return reviewBoardPost(env, session, payload);
     case 'startClassTimer': return startClassTimer(env, session, payload);
     case 'clearClassTimer': return clearClassTimer(env, session, payload);
