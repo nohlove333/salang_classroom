@@ -15,3 +15,9 @@ OWNER_TEACHER_ID=""
 CF_ANALYTICS_ACCOUNT_ID=""
 # Analytics Read API token for that account. Store as Worker secret, never in the browser.
 CF_ANALYTICS_TOKEN=""
+
+# Optional resource filters for site-only analytics. Leave unknown IDs empty.
+CF_METRICS_WORKER="salang-classroom"
+CF_METRICS_D1_ID=""
+CF_METRICS_R2_BUCKET=""
+CF_METRICS_DO_ID=""

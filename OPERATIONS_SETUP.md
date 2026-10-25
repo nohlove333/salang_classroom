@@ -42,3 +42,14 @@ Worker `salang-classroom`의 Settings → Variables and Secrets에서 다음을 
 `npm test`는 격리 SQLite/R2 mock/컨트롤러 시험이다. `npm run test:browser`는 Playwright 설치와 Chromium이 필요하다. `PLAYWRIGHT_MODULE`로 설치된 Playwright ESM 경로, `CHROMIUM_EXECUTABLE`로 Chromium 경로를 지정할 수 있다. 선택적으로 `SUITE_FONT_FILE`에 원래 SUITE Variable woff2를 주면 네트워크 없이 같은 폰트로 시각 시험한다. 테스트는 localhost:8123의 합성 교사·학생 API만 사용하고 운영 데이터를 쓰지 않는다.
 
 브라우저 시험: 1440/768/390px, 기존 로고·서체, 가로 넘침, 사이드바 접기, 특별 시간표 보강/학급/교실 저장, 분석 미연결 안내, 실제 IndexedDB 파일 복원 및 저장 중 추가 입력 보호. Google OAuth와 운영 교사·학생 계정 조작 시험을 대신하지 않는다.
+
+## 2026-10-25 v69 — Cloudflare 우선 보강
+
+- 기존 로고·styles.css·SUITE와 데이터 보존. Cloudflare 분석은 제작자가 화면을 열고 조회할 때만 실행한다. 서버 연결은 선택이며 Google OAuth는 사용자 후속 설정으로 유지한다.
+- 계정 전체/사이트 지정 리소스, 오늘/이번 달(UTC), Workers CPU·D1/R2/DO 저장공간·R2 작업 종류·DO CPU/메모리를 추가했다. 미설정 리소스를 계정 수치로 대체하지 않는다. 제품별 권한/필드 오류는 분리 표시한다.
+- 전체 상세 조회는 캐시 없을 때 최대 10 GraphQL 요청(동시 최대 4), 동일 범위 5분 캐시/진행 요청 병합. D1에 분석 원문 저장 없음. 저장량은 리소스별 기간 최대치이며 현재 총용량/월 청구량이 아니다. 무료 참고값은 일일 계정 합계에만 표시하며 실제 요금제/잔여량으로 표현하지 않는다.
+- 정기 보관의 최신 실행 상태 1행을 저장한다(매시 실행 시 약 24 D1 쓰기/일). 실제 운영 cron 발화 확인은 연결 후 필요하다. 자동 보관 opt-in 기본 꺼짐, 원본 자동 삭제 없음.
+- D1 공감 조회의 100개 바인딩 제한을 JSON 매개변수로 해결했다. 30명 동시 조회/120게시글 격리 시험에서 주요 콘텐츠·게시글 SELECT 각각 1회, 논리 SQL 103회이며 운영 rows_read 실측은 아니다. 완료된 운영 스키마는 cold isolate마다 2조회로 확인하고 반복 DDL을 생략한다.
+- 검증: 19 자동 테스트, Chromium 합성 fixture PC/태블릿/모바일 및 연결/미연결 분석·범위 전송·긴 리소스명·HTML 이스케이프. 실제 Cloudflare 토큰/운영 로그인/Google 동기화 실측은 미검증이다. 배포 결과는 최종 보고의 실제 health 및 Workers Build 결과로 확인한다.
+
+사이트만 조회하려면 Worker 변수 CF_METRICS_WORKER(기본 salang-classroom), CF_METRICS_D1_ID(데이터베이스 UUID), CF_METRICS_R2_BUCKET(버킷 이름), CF_METRICS_DO_ID(namespace ID)를 설정한다. 실제 값을 추측하지 않는다. 기존 CF_ANALYTICS_ACCOUNT_ID 및 Analytics Read 권한 토큰 CF_ANALYTICS_TOKEN은 서버에만 보관한다. 토큰을 브라우저·채팅·Git에 넣지 않는다. 계정별 보존기간/요금제에 따라 월간 범위를 지원하지 않으면 해당 제품의 오류 안내를 표시한다. 리소스별 조회는 최대 1,000그룹이며 상한 도달 안내를 표시한다.

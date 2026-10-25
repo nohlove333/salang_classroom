@@ -41,3 +41,6 @@
 - `public/workspace.css`: 새 특별 시간표 fieldset의 min-width와 480px 이하 한 열 배치만 추가. 기존 디자인 복구 규칙 유지.
 - 실제 Chromium 1440/768/390px fixture 화면으로 로고·서체·가로 넘침 및 모바일 모달 확인. 원본 CDN의 SUITE woff2를 테스트에서만 주입해 네트워크 의존성을 줄였고 운영 폰트 경로는 바꾸지 않았다.
 - 테스트 스크린샷은 합성 데이터 검증 산출물이며 승인된 새 디자인 자산이 아니다.
+
+## v69 자산 유지
+brand-logo.jpg, styles.css, SUITE 원본 유지. 새 이미지/서체 없음. operations.js 분석 폼만 기존 UI 컴포넌트로 확장. index.html 자산 캐시 버전 69.

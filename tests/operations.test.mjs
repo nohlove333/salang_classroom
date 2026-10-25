@@ -3,9 +3,10 @@ import {readFile} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 const source=(await readFile(new URL('../worker/index.js',import.meta.url),'utf8')).replace("import qrcode from 'qrcode-generator';",'const qrcode=null;');
-const mod=await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport {SCHEMA,runScheduledBackups};').toString('base64'));
+const mod=await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport {SCHEMA,runScheduledBackups,observeScheduledBackups};').toString('base64'));
 const db=new DatabaseSync(':memory:');db.exec(mod.SCHEMA);db.exec('PRAGMA foreign_keys=ON');
-function prepare(sql,args=[]){return {sql,args,bind:(...a)=>prepare(sql,a),async first(){return db.prepare(sql).get(...args)||null;},async all(){return {results:db.prepare(sql).all(...args),meta:{rows_read:1}};},async run(){const r=db.prepare(sql).run(...args);return {meta:{changes:Number(r.changes),rows_written:Number(r.changes)}};}};}
+const queryLog=[];
+function prepare(sql,args=[]){return {sql,args,bind:(...a)=>prepare(sql,a),async first(){assert.ok(args.length<=100,'D1 parameter ceiling');queryLog.push(sql);return db.prepare(sql).get(...args)||null;},async all(){assert.ok(args.length<=100,'D1 parameter ceiling');queryLog.push(sql);return {results:db.prepare(sql).all(...args),meta:{rows_read:1}};},async run(){const r=db.prepare(sql).run(...args);return {meta:{changes:Number(r.changes),rows_written:Number(r.changes)}};}};}
 const objects=new Map();let failPut=false;
 const bucket={async put(key,value){if(failPut)throw Error('R2 test failure');const bytes=Buffer.from(typeof value==='string'?value:await new Response(value).arrayBuffer());const row={bytes,size:bytes.length,etag:createHash('md5').update(bytes).digest('hex')};objects.set(key,row);return row;},async get(key){const r=objects.get(key);return r?{...r,body:new ReadableStream({start(c){c.enqueue(r.bytes);c.close();}}),text:async()=>r.bytes.toString()}:null;},async head(key){return objects.get(key)||null;},async delete(key){objects.delete(key);}};
 const env={DB:{prepare,async batch(statements){db.exec('BEGIN');try{const results=statements.map(s=>{const q=db.prepare(s.sql);if(q.columns().length)return {results:q.all(...s.args),meta:{changes:1}};const r=q.run(...s.args);return {meta:{changes:Number(r.changes)}};});db.exec('COMMIT');return results;}catch(e){db.exec('ROLLBACK');throw e;}}},FILES:bucket};
@@ -68,3 +69,24 @@ const originalFetch=globalThis.fetch;let fetches=0;globalThis.fetch=async(url,op
 await call('opsCloudUsage',{},'a',403);env.OWNER_TEACHER_ID='a';assert.equal((await call('opsCloudUsage')).connected,false);assert.equal(fetches,0);env.CF_ANALYTICS_ACCOUNT_ID='test-account';env.CF_ANALYTICS_TOKEN='private-token';
 const usage=await call('opsCloudUsage');assert.equal(usage.products.length,4);assert.equal(usage.products.find(p=>p.name==='R2').available,false);assert.ok(!JSON.stringify(usage).includes('private-token'));await call('opsCloudUsage');assert.equal(fetches,4);await call('opsCloudUsage',{},'b',403);globalThis.fetch=originalFetch;
 console.log('PASS: resumable 510-row/7-file backup, retry checkpoints, restore, verification, original preservation, cancellation, source-change rejection, analytics owner/configuration gates, partial errors and cache.');
+
+// Thirty simultaneous students share a raw snapshot, but receive only their own submissions.
+db.prepare('INSERT INTO classes(id,teacher_id,name,code,created_at,updated_at) VALUES(?,?,?,?,?,?)').run('load','a','Load','LOAD',now,now);
+for(const [id,type] of [['loadboard0','board'],['loadboard1','board'],['loadboard2','board'],['loadboard3','board'],['loadtask','assignment']])db.prepare('INSERT INTO contents(id,class_id,type,title,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id,'load',type,id,'',now,now);
+const tokens=[];for(let i=0;i<30;i++){const id='loadstudent'+i,token='loadtoken'+i;tokens.push(token);db.prepare('INSERT INTO students(id,class_id,number,name,pin_hash,pin_salt,created_at) VALUES(?,?,?,?,?,?,?)').run(id,'load',i+1,id,'hash','salt',now);db.prepare('INSERT INTO sessions VALUES(?,?,?,?,?,?)').run(createHash('sha256').update(token).digest('hex'),'student',id,'load',new Date(Date.now()+86400000).toISOString(),now);}
+for(let i=0;i<120;i++)db.prepare('INSERT INTO board_posts(id,class_id,board_id,student_id,student_number,student_name,text,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('loadpost'+i,'load','loadboard'+Math.floor(i/30),'loadstudent'+i%30,i%30+1,'Nick','Text','published',now,now);
+for(let i=0;i<30;i++)await call('upsertSubmission',{assignmentId:'loadtask',text:'private '+i},tokens[i]);
+queryLog.length=0;const snapshots=await Promise.all(tokens.map(token=>call('getStudentClass',{},token)));
+assert.equal(queryLog.filter(q=>q==='SELECT * FROM contents WHERE class_id=? ORDER BY created_at DESC').length,1);
+assert.equal(queryLog.filter(q=>q==='SELECT * FROM board_posts WHERE class_id=? ORDER BY student_number').length,1);
+assert.ok(snapshots.every(s=>s.boardPosts.length===120));assert.ok(snapshots.every((s,i)=>s.submissions.length===1&&s.submissions[0].studentId==='loadstudent'+i));
+console.log('PASS: 30 concurrent student requests/120 board posts share one content and board snapshot; all statements obey 100-parameter ceiling. Logical SQL calls:',queryLog.length,'(not production rows_read).');
+// Cron observation writes only one bounded latest-result row and does not create a backup without opt-in.
+db.prepare('UPDATE class_operations SET backup_enabled=0').run();const before=db.prepare('SELECT COUNT(*) n FROM class_backups').get().n;
+const observed=await mod.observeScheduledBackups(env);assert.equal(observed.status,'ok');assert.equal(observed.stage,'idle');assert.equal(db.prepare('SELECT COUNT(*) n FROM class_backups').get().n,before);
+const runtime=JSON.parse(db.prepare("SELECT value FROM operations_runtime WHERE key='scheduled-backup'").get().value);assert.equal(runtime.stage,'idle');assert.equal((await call('opsOverview',{},'b')).runtime,null);assert.equal((await call('opsOverview',{},'a')).runtime.status,'ok');
+console.log('PASS: cron latest-run evidence, idle no-copy behavior and owner-only runtime visibility.');
+// New isolates should not replay all DDL once the additive migration is complete.
+const cold=await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport {ensureOperations};\n// cold isolate').toString('base64'));
+queryLog.length=0;await cold.ensureOperations(env);assert.equal(queryLog.length,2);assert.ok(queryLog.every(q=>q.startsWith('SELECT')));
+console.log('PASS: completed operations schema uses two indexed/metadata checks per cold isolate instead of repeated DDL.');

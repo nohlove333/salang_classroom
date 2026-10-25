@@ -1,6 +1,6 @@
 import qrcode from 'qrcode-generator';
 
-const RELEASE = '2026-10-25-v68';
+const RELEASE = '2026-10-25-v69';
 const FREE_R2_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 let featureSchemaVerified = false;
 let featureSchemaError = '';
@@ -757,8 +757,8 @@ async function classData(env, classId, studentId = '', knownVersion = null) {
     }
     if (data.boardPosts.length) {
       const selected = await all(env.DB.prepare(
-        `SELECT post_id,emoji FROM board_post_reactions WHERE student_id=? AND post_id IN (${placeholders(data.boardPosts.length)})`
-      ).bind(studentId, ...data.boardPosts.map((post) => post.id)));
+        `SELECT post_id,emoji FROM board_post_reactions WHERE student_id=? AND post_id IN (SELECT value FROM json_each(?))`
+      ).bind(studentId, JSON.stringify(data.boardPosts.map((post) => post.id))));
       const byPost = new Map(selected.map((row) => [row.post_id, row.emoji]));
       for (const post of data.boardPosts) post.myReaction = byPost.get(post.id) || '';
     }
@@ -807,8 +807,8 @@ async function readClassSnapshot(env, classId, studentId = '') {
   });
   if (posts.length) {
     const reactionRows = await all(env.DB.prepare(
-      `SELECT post_id,emoji,COUNT(*) AS total FROM board_post_reactions WHERE post_id IN (${placeholders(posts.length)}) GROUP BY post_id,emoji`
-    ).bind(...posts.map((post) => post.id)));
+      `SELECT post_id,emoji,COUNT(*) AS total FROM board_post_reactions WHERE post_id IN (SELECT value FROM json_each(?)) GROUP BY post_id,emoji`
+    ).bind(JSON.stringify(posts.map((post) => post.id))));
     const postById = new Map(posts.map((post) => [post.id, post]));
     for (const post of posts) post.reactions = {};
     for (const row of reactionRows) postById.get(row.post_id).reactions[row.emoji] = Number(row.total || 0);
@@ -2527,7 +2527,7 @@ function guestRoomQr(request) {
 }
 
 export default {
-  async scheduled(controller, env, ctx) { ctx.waitUntil(runScheduledBackups(env)); },
+  async scheduled(controller, env, ctx) { ctx.waitUntil(observeScheduledBackups(env)); },
   async fetch(request, env) {
     env = { ...env, DB: env.DB ? instrumentD1(env.DB) : env.DB };
     const url = new URL(request.url);
@@ -2819,6 +2819,7 @@ CREATE INDEX IF NOT EXISTS operations_due ON class_operations(backup_enabled,nex
 CREATE TABLE IF NOT EXISTS class_backups(id TEXT PRIMARY KEY,teacher_id TEXT NOT NULL,class_id TEXT NOT NULL,created_at TEXT NOT NULL,r2_key TEXT NOT NULL,checksum TEXT NOT NULL,bytes INTEGER NOT NULL,restored_class_id TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS backups_owner_class ON class_backups(teacher_id,class_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS guest_timers(class_id TEXT PRIMARY KEY,title TEXT NOT NULL,sound TEXT NOT NULL,started_at TEXT NOT NULL,ends_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS operations_runtime(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS backup_jobs(id TEXT PRIMARY KEY,teacher_id TEXT NOT NULL,class_id TEXT NOT NULL,kind TEXT NOT NULL,source_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',cursor INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL,state TEXT NOT NULL,lease_until INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS backup_jobs_due ON backup_jobs(kind,status,error,created_at);
 CREATE INDEX IF NOT EXISTS backup_jobs_owner ON backup_jobs(teacher_id,status,created_at);
@@ -2826,9 +2827,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS backup_jobs_source ON backup_jobs(teacher_id,k
 CREATE TABLE IF NOT EXISTS restore_claims(backup_id TEXT PRIMARY KEY,class_id TEXT NOT NULL,valid INTEGER NOT NULL DEFAULT 1 CHECK(valid=1));`;
 let operationsReady;
 async function ensureOperations(env) {
-  if (!operationsReady) operationsReady=(async()=>{for(const sql of operationsSchema.split(';').map(x=>x.trim()).filter(Boolean)) await env.DB.prepare(sql).run();const cols=await all(env.DB.prepare('PRAGMA table_info(idea_posts)'));if(!cols.some(c=>c.name==='display_mode')){try{await env.DB.prepare("ALTER TABLE idea_posts ADD COLUMN display_mode TEXT NOT NULL DEFAULT 'anonymous'").run();}catch(e){if(!String(e.message).includes('duplicate column'))throw e;}}})().catch(e=>{operationsReady=null;throw e;});
+  if(!operationsReady)operationsReady=(async()=>{
+    const marker=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='operations_schema'").first();
+    if(marker&&await env.DB.prepare('SELECT version FROM operations_schema WHERE version=69').first())return;
+    for(const sql of operationsSchema.split(';').map(x=>x.trim()).filter(Boolean))await env.DB.prepare(sql).run();
+    const cols=await all(env.DB.prepare('PRAGMA table_info(idea_posts)'));
+    if(!cols.some(c=>c.name==='display_mode')){try{await env.DB.prepare("ALTER TABLE idea_posts ADD COLUMN display_mode TEXT NOT NULL DEFAULT 'anonymous'").run();}catch(e){if(!String(e.message).includes('duplicate column'))throw e;}}
+    // Mark only after every additive change succeeds; a partial migration remains retryable.
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS operations_schema(version INTEGER PRIMARY KEY)').run();
+    await env.DB.prepare('INSERT OR IGNORE INTO operations_schema(version) VALUES(69)').run();
+  })().catch(e=>{operationsReady=null;throw e;});
   return operationsReady;
 }
+
 async function requireActiveClass(env,id) {
   await ensureOperations(env);
   const row=await env.DB.prepare('SELECT status FROM class_operations WHERE class_id=?').bind(id).first();
@@ -2847,12 +2858,13 @@ async function operationsAction(request,env,session,action,p) {
     else{const seconds=Number(p.seconds);if(!Number.isInteger(seconds)||seconds<10||seconds>7200)throw new AppError('10초~120분을 입력해 주세요.','INVALID');const sound=['bell','chime','woodblock','ascending'].includes(p.sound)?p.sound:'bell',time=nowIso();await env.DB.prepare('INSERT INTO guest_timers VALUES(?,?,?,?,?,?) ON CONFLICT(class_id) DO UPDATE SET title=excluded.title,sound=excluded.sound,started_at=excluded.started_at,ends_at=excluded.ends_at,updated_at=excluded.updated_at').bind(room.id,String(p.title||'활동 시간').slice(0,50),sound,time,new Date(Date.now()+seconds*1000).toISOString(),time).run();}
     await touchGuestRoom(env,room.id);return {saved:true};
   }
-  if(action==='opsCloudUsage') return cloudUsage(env,session);
+  if(action==='opsCloudUsage') return cloudUsage(env,session,p);
   if(action==='opsOverview') {
     const classes=await all(env.DB.prepare("SELECT c.id,c.name,COALESCE(o.status,'active') status,COALESCE(o.backup_enabled,0) backup_enabled,o.next_backup,o.last_backup,o.last_error FROM classes c LEFT JOIN class_operations o ON o.class_id=c.id WHERE c.teacher_id=? ORDER BY c.display_order").bind(session.user_id));
     const backups=await all(env.DB.prepare('SELECT id,class_id,created_at,bytes,restored_class_id FROM class_backups WHERE teacher_id=? ORDER BY created_at DESC LIMIT 100').bind(session.user_id));
     const jobs=await all(env.DB.prepare("SELECT id,class_id,kind,status,cursor,total,error,created_at FROM backup_jobs WHERE teacher_id=? AND status IN ('pending','cleaning') ORDER BY created_at DESC LIMIT 30").bind(session.user_id));
-    return {classes,backups,jobs,cloudConfigured:!!(env.CF_ANALYTICS_ACCOUNT_ID&&env.CF_ANALYTICS_TOKEN),automaticDeletion:false,role:env.OWNER_TEACHER_ID===session.user_id?'owner':'teacher',metrics:env.OWNER_TEACHER_ID===session.user_id?{scope:'현재 Worker 인스턴스의 all/run/batch 결과 합계. first 조회·다른 인스턴스 제외. 계정 전체 사용량 아님',...d1Telemetry}:null,storage:await fileStorageStatus(env)};
+    const runtime=env.OWNER_TEACHER_ID===session.user_id?await env.DB.prepare("SELECT value FROM operations_runtime WHERE key='scheduled-backup'").first():null;
+    return {classes,backups,jobs,runtime:runtime?JSON.parse(runtime.value):null,cloudConfigured:!!(env.CF_ANALYTICS_ACCOUNT_ID&&env.CF_ANALYTICS_TOKEN),automaticDeletion:false,role:env.OWNER_TEACHER_ID===session.user_id?'owner':'teacher',metrics:env.OWNER_TEACHER_ID===session.user_id?{scope:'현재 Worker 인스턴스의 all/run/batch 결과 합계. first 조회·다른 인스턴스 제외. 계정 전체 사용량 아님',...d1Telemetry}:null,storage:await fileStorageStatus(env)};
   }
   if(action==='opsDisplayGet') {
     await ownedClass(env,session,p.classId);
@@ -2984,11 +2996,12 @@ async function restoreClassBackup(env,session,p,jobPlan=null) {
   invalidateFileStorageStatus();return {classId,code,studentsRequirePinReset:true,recordsRestored:recoveredRecords.length};
 }
 async function runScheduledBackups(env) {
-  if(!await schemaReady(env))return;await ensureOperations(env);
+  if(!await schemaReady(env))throw new AppError('데이터베이스 준비가 필요합니다.','DATABASE_SETUP_FAILED',503);await ensureOperations(env);
   const job=await env.DB.prepare("SELECT * FROM backup_jobs WHERE kind='backup' AND status IN ('pending','cleaning') AND lease_until<? AND error='' ORDER BY created_at LIMIT 1").bind(Date.now()).first();
-  if(job){try{await stepBackupJob(env,{user_id:job.teacher_id,role:'teacher'},job.id);}catch(e){console.error('Backup step failed',job.id,e.code||'ERROR');}return;}
-  const due=await all(env.DB.prepare('SELECT class_id,teacher_id FROM class_operations WHERE backup_enabled=1 AND next_backup<=? AND lease_until<? ORDER BY next_backup LIMIT 1').bind(Date.now(),Date.now()));
-  for(const r of due){try{const session={user_id:r.teacher_id,role:'teacher'},j=await createClassBackup(env,session,r.class_id,true);await stepBackupJob(env,session,j.jobId);}catch(e){console.error('Scheduled class backup failed',r.class_id,e.code||'ERROR');}}
+  if(job){await stepBackupJob(env,{user_id:job.teacher_id,role:'teacher'},job.id);return {stage:'continued'};}
+  const due=await all(env.DB.prepare("SELECT class_id,teacher_id FROM class_operations WHERE backup_enabled=1 AND next_backup<=? AND lease_until<? AND NOT EXISTS(SELECT 1 FROM backup_jobs j WHERE j.teacher_id=class_operations.teacher_id AND j.kind='backup' AND j.source_id=class_operations.class_id AND j.status IN ('pending','cleaning')) ORDER BY next_backup LIMIT 1").bind(Date.now(),Date.now()));
+  for(const r of due){const session={user_id:r.teacher_id,role:'teacher'},j=await createClassBackup(env,session,r.class_id,true);await stepBackupJob(env,session,j.jobId);}
+  return {stage:due.length?'started':'idle'};
 }
 
 // D1 result metadata only; does not write counters back into D1 or retain SQL/student data.
@@ -3003,33 +3016,65 @@ function instrumentD1(db){
 
 // Optional account analytics: no network request until the owner explicitly opens it.
 const cloudUsageCache=new Map();
-async function cloudUsage(env,session) {
+async function cloudUsage(env,session,p={}) {
   if(!env.OWNER_TEACHER_ID||env.OWNER_TEACHER_ID!==session.user_id)throw new AppError('제작자만 계정 사용량을 볼 수 있습니다.','FORBIDDEN',403);
+  const period=p.period||'day',scope=p.scope||'account';
+  if(!['day','month'].includes(period)||!['account','site'].includes(scope))throw new AppError('조회 범위를 확인하세요.','INVALID');
   if(!env.CF_ANALYTICS_ACCOUNT_ID||!env.CF_ANALYTICS_TOKEN)return {connected:false,reason:'서버의 Cloudflare 분석 연결을 설정한 뒤 조회할 수 있습니다.'};
-  const cacheKey=await sha256(env.CF_ANALYTICS_ACCOUNT_ID+'|'+env.CF_ANALYTICS_TOKEN),cached=cloudUsageCache.get(cacheKey);
-  if(cached&&cached.expires>Date.now())return cached.promise;
+  const end=new Date().toISOString(),start=period==='month'?end.slice(0,7)+'-01T00:00:00.000Z':end.slice(0,10)+'T00:00:00.000Z';
+  const resources={worker:env.CF_METRICS_WORKER||'salang-classroom',database:env.CF_METRICS_D1_ID,bucket:env.CF_METRICS_R2_BUCKET,namespace:env.CF_METRICS_DO_ID};
+  const cacheKey=await sha256(JSON.stringify([env.CF_ANALYTICS_ACCOUNT_ID,env.CF_ANALYTICS_TOKEN,start,scope,!!p.details,resources]));
+  const cached=cloudUsageCache.get(cacheKey);if(cached&&cached.expires>Date.now())return cached.promise;
   const promise=(async()=>{
-    const end=new Date().toISOString(),start=end.slice(0,10)+'T00:00:00.000Z';
+    // One aggregate group unless a resource dimension is explicitly requested.
     const datasets=[
-      ['Workers','workersInvocationsAdaptive','sum { requests errors subrequests }'],
-      ['D1','d1AnalyticsAdaptiveGroups','sum { rowsRead rowsWritten readQueries writeQueries }'],
-      ['R2','r2OperationsAdaptiveGroups','sum { requests }'],
-      ['Durable Objects','durableObjectsInvocationsAdaptiveGroups','sum { requests }']
+      {name:'Workers',node:'workersInvocationsAdaptive',fields:'sum { requests errors subrequests }',resource:'worker',filter:'scriptName'},
+      {name:'D1',node:'d1AnalyticsAdaptiveGroups',fields:'sum { rowsRead rowsWritten readQueries writeQueries }',resource:'database',filter:'databaseId'},
+      {name:'R2',node:'r2OperationsAdaptiveGroups',fields:'sum { requests }',resource:'bucket',filter:'bucketName'},
+      {name:'Durable Objects',node:'durableObjectsInvocationsAdaptiveGroups',fields:'sum { requests }',resource:'namespace',filter:'namespaceId'}
     ];
-    const products=await Promise.all(datasets.map(async([name,node,fields])=>{
+    if(p.details)datasets.push(
+      {name:'Workers CPU',node:'workersInvocationsAdaptive',fields:'quantiles { cpuTimeP50 cpuTimeP99 }',resource:'worker',filter:'scriptName',group:'quantiles',note:'CPU 분포(µs), 합계·청구 CPU가 아닙니다.'},
+      {name:'D1 저장공간',node:'d1StorageAdaptiveGroups',fields:'max { databaseSizeBytes } dimensions { databaseId }',resource:'database',filter:'databaseId',group:'max',dimension:'databaseId',note:'DB별 조회 기간 최대 크기. 현재 시점 용량·청구량과 다를 수 있습니다.'},
+      {name:'R2 저장공간',node:'r2StorageAdaptiveGroups',fields:'max { payloadSize metadataSize objectCount } dimensions { bucketName }',resource:'bucket',filter:'bucketName',group:'max',dimension:'bucketName',note:'버킷별 조회 기간 최대치. GB-month 월평균 사용량이 아닙니다.'},
+      {name:'R2 작업 종류',node:'r2OperationsAdaptiveGroups',fields:'sum { requests } dimensions { actionType }',resource:'bucket',filter:'bucketName',dimension:'actionType',note:'작업 종류별 호출 수. 저장 등급·청구 여부에 따라 실제 과금과 다릅니다.'},
+      {name:'DO CPU·메모리',node:'durableObjectsPeriodicGroups',fields:'sum { cpuTime } quantiles { memoryUsageBytesP50 memoryUsageBytesP99 }',resource:'namespace',filter:'namespaceId',note:'CPU 합계와 isolate 메모리 분포. WebSocket 데이터는 연결 종료 등으로 반영이 지연될 수 있습니다.'},
+      {name:'DO 저장공간',node:'durableObjectsStorageGroups',fields:'max { storedBytes } dimensions { namespaceId }',resource:'namespace',filter:'namespaceId',group:'max',dimension:'namespaceId',note:'namespace별 조회 기간 최대 저장량.'}
+    );
+    const products=[];
+    for(let offset=0;offset<datasets.length;offset+=4)products.push(...await Promise.all(datasets.slice(offset,offset+4).map(async def=>{
+      const {name,node,fields}=def,resource=resources[def.resource];
+      if(scope==='site'&&!resource)return {name,available:false,reason:'이 사이트의 '+def.resource+' 식별자를 서버에 설정해야 합니다. 계정 전체 값으로 대신 표시하지 않습니다.'};
       try{
-        const query=`query($account:string!){viewer{accounts(filter:{accountTag:$account}){${node}(limit:1,filter:{datetime_geq:${JSON.stringify(start)},datetime_leq:${JSON.stringify(end)}}){${fields}}}}}`;
-        const response=await fetch('https://api.cloudflare.com/client/v4/graphql',{method:'POST',headers:{Authorization:'Bearer '+env.CF_ANALYTICS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({query,variables:{account:env.CF_ANALYTICS_ACCOUNT_ID,start,end}}),signal:AbortSignal.timeout(15000)});
+        const where=`datetime_geq:${JSON.stringify(start)},datetime_leq:${JSON.stringify(end)}`+(scope==='site'?`,${def.filter}:${JSON.stringify(resource)}`:'');
+        const limit=def.dimension?1000:1;
+        const query=`query($account:string!){viewer{accounts(filter:{accountTag:$account}){${node}(limit:${limit},filter:{${where}}){${fields}}}}}`;
+        const response=await fetch('https://api.cloudflare.com/client/v4/graphql',{method:'POST',headers:{Authorization:'Bearer '+env.CF_ANALYTICS_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({query,variables:{account:env.CF_ANALYTICS_ACCOUNT_ID}}),signal:AbortSignal.timeout(15000)});
         if(!response.ok)return {name,available:false,reason:'분석 서버 응답 '+response.status+' · 권한과 연결을 확인하세요.'};
         const json=await response.json(),rows=json.data?.viewer?.accounts?.[0]?.[node];
-        if(json.errors?.length||!Array.isArray(rows))return {name,available:false,reason:'이 분석 자료를 조회할 수 없습니다. 계정의 분석 권한·요금제·API 필드를 확인하세요.'};
-        // No dimensions requested: the API aggregates the complete selected account/time window.
-        return {name,available:true,values:rows[0]?.sum||{},empty:!rows.length};
+        if(json.errors?.length||!Array.isArray(rows))return {name,available:false,reason:'이 분석 자료를 조회할 수 없습니다. 계정 권한·요금제·API 필드를 확인하세요.'};
+        const values=def.dimension?{}:{...(rows[0]?.[def.group||'sum']||{}),...(rows[0]?.quantiles||{})};
+        const breakdown=def.dimension?rows.map(r=>({name:String(r.dimensions?.[def.dimension]||'구분 없음'),values:r[def.group||'sum']||{}})):undefined;
+        return {name,available:true,values,breakdown,empty:!rows.length,truncated:!!def.dimension&&rows.length>=limit,note:def.note||''};
       }catch{return {name,available:false,reason:'분석 서버에 연결하지 못했습니다. 잠시 후 다시 조회하세요.'};}
-    }));
-    return {connected:products.some(p=>p.available),configured:true,scope:'Cloudflare 계정 전체 · 오늘 UTC 00:00 이후(한국 시간 오전 9시 기준)',start,end,fetchedAt:new Date().toISOString(),products,note:'분석 반영 지연·샘플링이 있을 수 있습니다. 청구서·잔여 무료 한도와 동일한 수치가 아니며 저장용량은 Cloudflare 대시보드에서 확인하세요.'};
+    })));
+    const references=[];
+    if(scope==='account'&&period==='day')for(const [name,field,limit] of [['Workers','requests',100000],['D1','rowsRead',5000000],['D1','rowsWritten',100000]]){
+      const metric=products.find(x=>x.name===name),value=metric?.values?.[field];
+      if(metric?.available&&typeof value==='number')references.push({name,field,value,limit,percent:Math.round(value/limit*1000)/10});
+    }
+    return {connected:products.some(x=>x.available),configured:true,scope:(scope==='account'?'Cloudflare 계정 전체':'이 사이트에 지정된 리소스')+' · '+(period==='month'?'이번 달 UTC 1일부터':'오늘 UTC 00:00부터'),period,scopeKey:scope,start,end,fetchedAt:new Date().toISOString(),products,references,referenceNote:'무료 요금제 참고값(2026-10-25 확인)입니다. 계정의 실제 요금제·잔여 한도 확인값이 아니며 자동 차단하지 않습니다.',note:'분석 반영 지연·샘플링이 있습니다. 실제 청구액·계약별 한도는 Cloudflare 대시보드에서 확인하세요.'};
   })();
-  cloudUsageCache.clear();cloudUsageCache.set(cacheKey,{expires:Date.now()+300000,promise});return promise;
+  for(const [k,v] of cloudUsageCache)if(v.expires<Date.now())cloudUsageCache.delete(k);
+  if(cloudUsageCache.size>=12)cloudUsageCache.delete(cloudUsageCache.keys().next().value);
+  cloudUsageCache.set(cacheKey,{expires:Date.now()+300000,promise});return promise;
+}
+
+async function observeScheduledBackups(env){
+  const startedAt=nowIso();let result;
+  try{result={status:'ok',...await runScheduledBackups(env)};}catch(e){result={status:'error',errorCode:String(e.code||'SERVER_ERROR').slice(0,60)};console.error('Scheduled backup failed',result.errorCode);}
+  try{await ensureOperations(env);await env.DB.prepare("INSERT INTO operations_runtime(key,value) VALUES('scheduled-backup',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({...result,startedAt,finishedAt:nowIso(),release:RELEASE})).run();}catch{console.error('Scheduled status could not be recorded');}
+  return result;
 }
 
 function jobResult(job,extra={}) {return {jobId:job.id,kind:job.kind,status:job.status,cursor:job.cursor,total:job.total,...extra};}
